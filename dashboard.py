@@ -47,6 +47,21 @@ def add_breaks_for_gaps(df, threshold_seconds=5):
         return df_final.drop(columns=['time_diff'])
     return df.drop(columns=['time_diff'])
 
+def format_offline_duration(seconds):
+    if seconds < 0: seconds = 0
+    m, s = divmod(int(seconds), 60)
+    h, m = divmod(m, 60)
+    d, h = divmod(h, 24)
+    mo, d = divmod(d, 30)
+    
+    parts = []
+    if mo > 0: parts.append(f"{mo} month{'s' if mo != 1 else ''}")
+    if d > 0: parts.append(f"{d} day{'s' if d != 1 else ''}")
+    if h > 0: parts.append(f"{h} hr{'s' if h != 1 else ''}")
+    if m > 0: parts.append(f"{m} min{'s' if m != 1 else ''}")
+    if s > 0 or len(parts) == 0: parts.append(f"{s} sec")
+    return ", ".join(parts)
+
 @st.cache_data(ttl=3)
 def get_devices():
     try:
@@ -136,7 +151,15 @@ else:
 if is_online:
     st.success("🟢 **SYSTEM ONLINE** — Live Data Streaming Active")
 else:
-    st.error("🔴 **SYSTEM OFFLINE** — Connection Lost or Engine Off")
+    if latest:
+        # Calculate real offline duration using UTC+5 to match your Unity App timezone
+        last_seen = pd.to_datetime(latest["timestamp"])
+        current_time = datetime.utcnow() + timedelta(hours=5)
+        offline_seconds = (current_time - last_seen).total_seconds()
+        offline_text = format_offline_duration(offline_seconds)
+        st.error(f"🔴 **SYSTEM OFFLINE** — Engine off for {offline_text}")
+    else:
+        st.error("🔴 **SYSTEM OFFLINE** — No vehicle connected.")
 
 # ---------------------------------------------------------
 # 5. ML ALERTS
@@ -155,7 +178,7 @@ st.divider()
 # ---------------------------------------------------------
 # 6. TABBED INTERFACE
 # ---------------------------------------------------------
-tab1, tab2, tab3 = st.tabs(["📊 Live Metrics", "📈 10-Minute Telemetry", "📝 Raw Historical Data"])
+tab1, tab2, tab3 = st.tabs(["📊 Live Metrics", "📈 Graphs", "📝 Raw Historical Data"])
 
 # ================= TAB 1: LIVE METRICS =================
 with tab1:
@@ -232,15 +255,28 @@ with tab2:
 
 # ================= TAB 3: TABULAR DATA (LAST 3 HOURS) =================
 with tab3:
-    st.subheader("Raw Database Logs (Last 3 Hours)")
+    st.subheader("Historical Telemetry Log")
     if not df.empty:
+        # Filter for strictly the last 3 hours based on the latest data packet
         three_hours_ago = df["timestamp"].max() - timedelta(hours=3)
         df_table = df[df["timestamp"] >= three_hours_ago].copy()
         
-        # Display most recent first
-        st.dataframe(df_table.sort_values("timestamp", ascending=False), use_container_width=True)
+        if df_table.empty:
+            st.info("No online activity detected for the last 3 hours.")
+        else:
+            # Clean up the format so it's not messy!
+            # Separate the timestamp into dedicated Date and exact Time (with seconds) columns
+            df_table['Date'] = df_table['timestamp'].dt.strftime('%Y-%m-%d')
+            df_table['Time (Local)'] = df_table['timestamp'].dt.strftime('%H:%M:%S')
+            
+            # Reorder columns to put Date and Time first, drop the raw timestamp
+            cols = ['Date', 'Time (Local)'] + [c for c in df_table.columns if c not in ['Date', 'Time (Local)', 'timestamp']]
+            df_table = df_table[cols]
+            
+            # Display perfectly sorted, most recent first, without the ugly index column
+            st.dataframe(df_table.sort_values(["Date", "Time (Local)"], ascending=[False, False]), hide_index=True, use_container_width=True)
     else:
-        st.info("No logs found.")
+        st.info("Database is entirely blank. No historical logs exist.")
 
 # ---------------------------------------------------------
 # 7. AUTO-REFRESH LOGIC
