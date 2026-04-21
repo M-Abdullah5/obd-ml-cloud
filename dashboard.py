@@ -67,8 +67,8 @@ def get_live_data(device_id):
 @st.cache_data(ttl=5)
 def get_history_data(device_id):
     try:
-        # Fetch latest 2000 records for the 10-minute window
-        res = requests.get(f"{FIREBASE_DB_URL}history/{device_id}.json?orderBy=\"$key\"&limitToLast=2000")
+        # Fetch latest 25000 records (approx 3.5 hours at 2Hz)
+        res = requests.get(f"{FIREBASE_DB_URL}history/{device_id}.json?orderBy=\"$key\"&limitToLast=25000")
         if res.status_code == 200 and res.json():
             records = list(res.json().values())
             df = pd.DataFrame(records)
@@ -161,7 +161,7 @@ tab1, tab2, tab3 = st.tabs(["📊 Live Metrics", "📈 10-Minute Telemetry", "�
 with tab1:
     st.subheader("Real-Time Engine Status")
     
-    if latest:
+    if latest and is_online:
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("RPM", int(latest.get("RPM", 0)))
         c2.metric("Speed", f"{int(latest.get('Speed', 0))} km/h")
@@ -182,14 +182,22 @@ with tab1:
         c11.metric("STFT / LTFT", f"{float(latest.get('STFT', 0))}% / {float(latest.get('LTFT', 0))}%")
         c12.metric("O2 Sensor", f"{float(latest.get('O2Voltage', 0))} V")
     else:
-        st.info("Awaiting connection to display metrics...")
+        # Show 0s when offline
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("RPM", 0); c2.metric("Speed", "0 km/h"); c3.metric("Engine Load", "0 %"); c4.metric("Throttle", "0 %")
+        st.markdown("<br>", unsafe_allow_html=True)
+        c5, c6, c7, c8 = st.columns(4)
+        c5.metric("Coolant Temp", "0 °C"); c6.metric("Oil Temp", "0 °C"); c7.metric("Intake Temp", "0 °C"); c8.metric("Voltage", "0 V")
+        st.markdown("<br>", unsafe_allow_html=True)
+        c9, c10, c11, c12 = st.columns(4)
+        c9.metric("MAP Pressure", "0 kPa"); c10.metric("MAF Airflow", "0 g/s"); c11.metric("STFT / LTFT", "0% / 0%"); c12.metric("O2 Sensor", "0 V")
 
-# ================= TAB 2: GRAPHS (LAST 10 MINS) =================
+# ================= TAB 2: GRAPHS (LAST 5 MINS) =================
 with tab2:
     if not df.empty:
-        # STRICT 10-MINUTE WINDOW CUTOFF
-        ten_mins_ago = df["timestamp"].max() - timedelta(minutes=10)
-        df_graphs = df[df["timestamp"] >= ten_mins_ago].copy()
+        # STRICT 5-MINUTE WINDOW CUTOFF
+        five_mins_ago = df["timestamp"].max() - timedelta(minutes=5)
+        df_graphs = df[df["timestamp"] >= five_mins_ago].copy()
         
         df_plot = add_breaks_for_gaps(df_graphs, threshold_seconds=5)
         
@@ -222,12 +230,15 @@ with tab2:
     else:
         st.info("No historical data available yet. Start the engine to generate graphs!")
 
-# ================= TAB 3: TABULAR DATA =================
+# ================= TAB 3: TABULAR DATA (LAST 3 HOURS) =================
 with tab3:
-    st.subheader("Raw Database Logs")
+    st.subheader("Raw Database Logs (Last 3 Hours)")
     if not df.empty:
+        three_hours_ago = df["timestamp"].max() - timedelta(hours=3)
+        df_table = df[df["timestamp"] >= three_hours_ago].copy()
+        
         # Display most recent first
-        st.dataframe(df.sort_values("timestamp", ascending=False), use_container_width=True)
+        st.dataframe(df_table.sort_values("timestamp", ascending=False), use_container_width=True)
     else:
         st.info("No logs found.")
 
