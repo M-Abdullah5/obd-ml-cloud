@@ -116,10 +116,14 @@ if device_id:
     df = get_history_data(device_id)
     
     if latest:
-        last_seen = pd.to_datetime(latest["timestamp"])
-        seconds_ago = (datetime.now() - last_seen).total_seconds()
+        # 🟢 FIX: Ignore timezones! Just check if the data has CHANGED recently.
+        current_data_str = str(latest)
         
-        # 🟢 EXACTLY 7 SECONDS OFFLINE THRESHOLD
+        if "last_data_str" not in st.session_state or st.session_state.last_data_str != current_data_str:
+            st.session_state.last_data_str = current_data_str
+            st.session_state.last_update_time = time.time()
+            
+        seconds_ago = time.time() - st.session_state.get("last_update_time", time.time())
         is_online = seconds_ago < 7 
     else:
         is_online = False
@@ -188,8 +192,6 @@ with tab2:
         df_graphs = df[df["timestamp"] >= ten_mins_ago].copy()
         
         df_plot = add_breaks_for_gaps(df_graphs, threshold_seconds=5)
-        
-        st.markdown(f"*Displaying data from **{ten_mins_ago.strftime('%H:%M:%S')}** to **{df['timestamp'].max().strftime('%H:%M:%S')}***")
         
         # Helper to create styled dark-themed Plotly charts
         def create_chart(data, y_col, title, color):
