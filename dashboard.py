@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 # ---------------------------------------------------------
 # 1. PAGE CONFIG & THEME SETUP
 # ---------------------------------------------------------
-st.set_page_config(page_title="AR Diagnostic Dashboard", layout="wide", page_icon="🏎️", initial_sidebar_state="expanded")
+st.set_page_config(page_title="AR Diagnostic Dashboard", layout="wide", page_icon="ARVIS2.png", initial_sidebar_state="expanded")
 
 # Custom CSS for a sleek dark theme feel
 st.markdown("""
