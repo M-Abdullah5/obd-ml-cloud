@@ -103,7 +103,7 @@ def get_history_data(device_id):
 # 3. SIDEBAR (FILLED WITH CONTEXT)
 # ---------------------------------------------------------
 with st.sidebar:
-    st.image("https://cdn-icons-png.flaticon.com/512/3204/3204094.png", width=80)
+    st.image("ARVIS.png", width=80)
     st.title("Vehicle Profile")
     
     devices = get_devices()
