@@ -5,209 +5,236 @@ import plotly.express as px
 import requests
 from datetime import datetime, timedelta
 
-# 1. Config & Setup
-st.set_page_config(page_title="OBD Dashboard", layout="wide", page_icon="🚗")
-st.title("🚗 OBD Predictive Maintenance Dashboard")
+# ---------------------------------------------------------
+# 1. PAGE CONFIG & THEME SETUP
+# ---------------------------------------------------------
+st.set_page_config(page_title="AR Diagnostic Dashboard", layout="wide", page_icon="🏎️", initial_sidebar_state="expanded")
+
+# Custom CSS for a sleek dark theme feel
+st.markdown("""
+<style>
+    .reportview-container { background: #0e1117; }
+    .sidebar .sidebar-content { background: #262730; }
+    h1, h2, h3 { color: #00ffcc !important; }
+    .stMetric label { color: #a1a1a1 !important; }
+</style>
+""", unsafe_allow_html=True)
 
 FIREBASE_DB_URL = "https://arapp-feb0f-default-rtdb.firebaseio.com/"
 
-# --- HELPER: Insert Gaps for Offline Periods ---
-def add_breaks_for_gaps(df, threshold_seconds=15):
-    if df.empty:
-        return df
-    
+# ---------------------------------------------------------
+# 2. HELPER FUNCTIONS
+# ---------------------------------------------------------
+def add_breaks_for_gaps(df, threshold_seconds=5):
+    """ Prevents Plotly from drawing straight lines across missing data periods """
+    if df.empty: return df
     df = df.sort_values("timestamp")
     df['time_diff'] = df['timestamp'].diff().dt.total_seconds()
-    
     gap_mask = df['time_diff'] > threshold_seconds
     
     gap_rows = []
     for idx, row in df[gap_mask].iterrows():
         gap_row = row.copy()
-        gap_row['RPM'] = None
-        gap_row['Speed'] = None
-        gap_row['CoolantTemp'] = None
-        gap_row['EngineLoad'] = None
-        gap_row['Voltage'] = None
-        gap_row['IntakeTemp'] = None
-        gap_row['MAF'] = None
-        gap_row['ThrottlePos'] = None
-        gap_row['OilTemp'] = None
-        gap_row['MAP'] = None
-        gap_row['FuelLevel'] = None
-        gap_row['STFT'] = None
-        gap_row['LTFT'] = None
-        gap_row['O2Voltage'] = None
+        for col in df.columns:
+            if col not in ['timestamp', 'time_diff', 'device_id']:
+                gap_row[col] = None
         gap_row['timestamp'] = row['timestamp'] - timedelta(seconds=1)
         gap_rows.append(gap_row)
-    
+        
     if gap_rows:
         df_gaps = pd.DataFrame(gap_rows)
-        df_final = pd.concat([df, df_gaps], ignore_index=True)
-        df_final = df_final.sort_values("timestamp")
+        df_final = pd.concat([df, df_gaps], ignore_index=True).sort_values("timestamp")
         return df_final.drop(columns=['time_diff'])
-    
     return df.drop(columns=['time_diff'])
 
-def format_time_ago(seconds):
-    seconds = int(seconds)
-    if seconds < 60: return f"{seconds} seconds"
-    elif seconds < 3600: return f"{seconds // 60} minutes"
-    elif seconds < 86400: return f"{seconds // 3600} hours"
-    else: return f"{seconds // 86400} days"
-
-@st.cache_data(ttl=5) # Cache for 5 seconds to prevent Firebase spam
+@st.cache_data(ttl=3)
 def get_devices():
     try:
         res = requests.get(f"{FIREBASE_DB_URL}live.json?shallow=true")
         if res.status_code == 200 and res.json():
             return list(res.json().keys())
-    except:
-        pass
+    except: pass
     return []
 
-@st.cache_data(ttl=2)
+@st.cache_data(ttl=1)
 def get_live_data(device_id):
     try:
         res = requests.get(f"{FIREBASE_DB_URL}live/{device_id}.json")
-        if res.status_code == 200:
-            return res.json()
-    except:
-        pass
+        if res.status_code == 200: return res.json()
+    except: pass
     return None
 
-@st.cache_data(ttl=10)
+@st.cache_data(ttl=5)
 def get_history_data(device_id):
     try:
-        # Fetch latest 1000 records
-        res = requests.get(f"{FIREBASE_DB_URL}history/{device_id}.json?orderBy=\"$key\"&limitToLast=1000")
+        # Fetch latest 2000 records for the 10-minute window
+        res = requests.get(f"{FIREBASE_DB_URL}history/{device_id}.json?orderBy=\"$key\"&limitToLast=2000")
         if res.status_code == 200 and res.json():
-            data = res.json()
-            # Convert dictionary of dicts to list of dicts
-            records = list(data.values())
+            records = list(res.json().values())
             df = pd.DataFrame(records)
             df['timestamp'] = pd.to_datetime(df['timestamp'])
+            
+            # Ensure ALL 14 columns exist to prevent Plotly crashes
+            expected_cols = ["RPM", "Speed", "CoolantTemp", "EngineLoad", "Voltage", 
+                             "IntakeTemp", "MAF", "ThrottlePos", "OilTemp", "MAP", 
+                             "FuelLevel", "STFT", "LTFT", "O2Voltage"]
+            for col in expected_cols:
+                if col not in df.columns: df[col] = 0.0
             return df
-    except:
-        pass
+    except: pass
     return pd.DataFrame()
 
-# 2. Sidebar & Filters
-devices = get_devices()
-device_id = None
-
+# ---------------------------------------------------------
+# 3. SIDEBAR (FILLED WITH CONTEXT)
+# ---------------------------------------------------------
 with st.sidebar:
-    st.header("Filters")
-    if devices:
-        device_id = st.selectbox("Device", devices)
-    else:
-        st.warning("No devices found online.")
+    st.image("https://cdn-icons-png.flaticon.com/512/3204/3204094.png", width=80)
+    st.title("Vehicle Profile")
+    
+    devices = get_devices()
+    device_id = st.selectbox("Active Device", devices) if devices else None
+    
+    st.divider()
+    st.markdown("### 🚘 Suzuki Alto 800")
+    st.markdown("- **Engine:** F8D (796cc 3-Cylinder)")
+    st.markdown("- **System:** Speed-Density (MAP)")
+    st.markdown("- **Protocol:** CAN 500kbps 11-bit")
+    st.divider()
+    
+    st.markdown("### 🤖 ML Architecture")
+    st.markdown("- **Model:** Predictive Diagnostic Net v1")
+    st.markdown("- **Target Classes:** 9 Subsystems")
+    st.markdown("- **Update Rate:** 2Hz (500ms)")
 
-# 3. Main Data Logic
+# ---------------------------------------------------------
+# 4. DATA FETCHING & STATUS LOGIC
+# ---------------------------------------------------------
+st.title("🚗 AR Telemetry Command Center")
+
 if device_id:
     latest = get_live_data(device_id)
     df = get_history_data(device_id)
     
     if latest:
-        now = datetime.now()
         last_seen = pd.to_datetime(latest["timestamp"])
-        seconds_ago = (now - last_seen).total_seconds()
-        is_online = seconds_ago < 20
-        time_text = format_time_ago(seconds_ago)
+        seconds_ago = (datetime.now() - last_seen).total_seconds()
         
-        # Display ML Alert if exists
-        ml_status = latest.get("ml_status", "Healthy")
-        ml_alert = latest.get("ml_alert", "None")
-        
-        if ml_status == "Critical":
-            st.error(f"🚨 ML CRITICAL ALERT: {ml_alert}")
-        elif ml_status == "Warning":
-            st.warning(f"⚠️ ML WARNING: {ml_alert}")
+        # 🟢 EXACTLY 7 SECONDS OFFLINE THRESHOLD
+        is_online = seconds_ago < 7 
     else:
         is_online = False
-        time_text = "Unknown"
-        ml_status = "Healthy"
 else:
     is_online = False
     latest = None
-    time_text = "No Device"
     df = pd.DataFrame()
 
-# 4. Status Banner
-status_col, empty_col = st.columns([2, 1])
-with status_col:
-    if is_online:
-        st.success(f"🟢 **ONLINE** (Live Data Streaming)")
-    else:
-        st.error(f"🔴 **OFFLINE** (Last seen: {time_text} ago)")
-
-# 5. Live Metrics (Current State)
-st.subheader("Live Engine Status")
-m1, m2, m3, m4 = st.columns(4)
-m5, m6, m7, m8 = st.columns(4)
-m9, m10, m11, m12 = st.columns(4)
-
-if latest is not None:
-    # Row 1
-    m1.metric("RPM", int(latest.get("RPM", 0)))
-    m2.metric("Speed", f"{int(latest.get('Speed', 0))} km/h")
-    m3.metric("Engine Load", f"{float(latest.get('EngineLoad', 0))} %")
-    m4.metric("Throttle", f"{float(latest.get('ThrottlePos', 0))} %")
-    
-    # Row 2
-    m5.metric("Coolant Temp", f"{float(latest.get('CoolantTemp', 0))} °C")
-    m6.metric("Oil Temp", f"{float(latest.get('OilTemp', 0))} °C")
-    m7.metric("Intake Temp", f"{float(latest.get('IntakeTemp', 0))} °C")
-    m8.metric("Fuel Level", f"{float(latest.get('FuelLevel', 0))} %")
-    
-    # Row 3
-    m9.metric("Voltage", f"{float(latest.get('Voltage', 0))} V")
-    m10.metric("MAP Pressure", f"{float(latest.get('MAP', 0))} kPa")
-    m11.metric("STFT / LTFT", f"{float(latest.get('STFT', 0))}% / {float(latest.get('LTFT', 0))}%")
-    m12.metric("O2 Voltage", f"{float(latest.get('O2Voltage', 0))} V")
-else:
-    m1.metric("RPM", 0); m2.metric("Speed", 0); m3.metric("Engine Load", 0); m4.metric("Throttle", 0)
-    m5.metric("Coolant Temp", 0); m6.metric("Oil Temp", 0); m7.metric("Intake Temp", 0); m8.metric("Fuel Level", 0)
-    m9.metric("Voltage", 0); m10.metric("MAP Pressure", 0); m11.metric("STFT / LTFT", "0% / 0%"); m12.metric("O2 Voltage", 0)
-
-# 6. Graphs
-st.subheader("Live Telemetry Graph")
-if not df.empty:
-    df_plot = add_breaks_for_gaps(df, threshold_seconds=10)
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        fig_rpm = px.line(df_plot, x="timestamp", y="RPM", title="RPM")
-        fig_rpm.update_traces(connectgaps=False, line_color='#FF4B4B')
-        st.plotly_chart(fig_rpm, use_container_width=True)
-        
-        fig_temp = px.line(df_plot, x="timestamp", y=["CoolantTemp", "OilTemp"], title="Engine Temperatures (°C)")
-        fig_temp.update_traces(connectgaps=False)
-        st.plotly_chart(fig_temp, use_container_width=True)
-        
-        fig_fuel = px.line(df_plot, x="timestamp", y=["STFT", "LTFT"], title="Fuel Trims (%)")
-        fig_fuel.update_traces(connectgaps=False)
-        st.plotly_chart(fig_fuel, use_container_width=True)
-
-    with col2:
-        fig_speed = px.line(df_plot, x="timestamp", y="Speed", title="Speed (km/h)")
-        fig_speed.update_traces(connectgaps=False, line_color='#00CC96')
-        st.plotly_chart(fig_speed, use_container_width=True)
-        
-        fig_load = px.line(df_plot, x="timestamp", y=["EngineLoad", "ThrottlePos"], title="Load & Throttle (%)")
-        fig_load.update_traces(connectgaps=False)
-        st.plotly_chart(fig_load, use_container_width=True)
-        
-        fig_map = px.line(df_plot, x="timestamp", y="MAP", title="Manifold Absolute Pressure (kPa)")
-        fig_map.update_traces(connectgaps=False, line_color='#AB63FA')
-        st.plotly_chart(fig_map, use_container_width=True)
-else:
-    st.info("Waiting for historical data...")
-
-# Auto-refresh
+# Status Banner
 if is_online:
-    time.sleep(2)
+    st.success("🟢 **SYSTEM ONLINE** — Live Data Streaming Active")
+else:
+    st.error("🔴 **SYSTEM OFFLINE** — Connection Lost or Engine Off")
+
+# ---------------------------------------------------------
+# 5. ML ALERTS
+# ---------------------------------------------------------
+if latest and is_online:
+    ml_status = latest.get("ml_status", "Healthy")
+    ml_alert = latest.get("ml_alert", "None")
+    
+    if ml_status == "Critical":
+        st.error(f"🚨 **CRITICAL ML ALERT:** {ml_alert}")
+    elif ml_status == "Warning":
+        st.warning(f"⚠️ **ML WARNING:** {ml_alert}")
+
+st.divider()
+
+# ---------------------------------------------------------
+# 6. TABBED INTERFACE
+# ---------------------------------------------------------
+tab1, tab2, tab3 = st.tabs(["📊 Live Metrics", "📈 10-Minute Telemetry", "📝 Raw Historical Data"])
+
+# ================= TAB 1: LIVE METRICS =================
+with tab1:
+    st.subheader("Real-Time Engine Status")
+    
+    if latest:
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("RPM", int(latest.get("RPM", 0)))
+        c2.metric("Speed", f"{int(latest.get('Speed', 0))} km/h")
+        c3.metric("Engine Load", f"{float(latest.get('EngineLoad', 0))} %")
+        c4.metric("Throttle", f"{float(latest.get('ThrottlePos', 0))} %")
+        
+        st.markdown("<br>", unsafe_allow_html=True)
+        c5, c6, c7, c8 = st.columns(4)
+        c5.metric("Coolant Temp", f"{float(latest.get('CoolantTemp', 0))} °C")
+        c6.metric("Oil Temp", f"{float(latest.get('OilTemp', 0))} °C")
+        c7.metric("Intake Temp", f"{float(latest.get('IntakeTemp', 0))} °C")
+        c8.metric("Voltage", f"{float(latest.get('Voltage', 0))} V")
+        
+        st.markdown("<br>", unsafe_allow_html=True)
+        c9, c10, c11, c12 = st.columns(4)
+        c9.metric("MAP Pressure", f"{float(latest.get('MAP', 0))} kPa")
+        c10.metric("MAF Airflow", f"{float(latest.get('MAF', 0))} g/s")
+        c11.metric("STFT / LTFT", f"{float(latest.get('STFT', 0))}% / {float(latest.get('LTFT', 0))}%")
+        c12.metric("O2 Sensor", f"{float(latest.get('O2Voltage', 0))} V")
+    else:
+        st.info("Awaiting connection to display metrics...")
+
+# ================= TAB 2: GRAPHS (LAST 10 MINS) =================
+with tab2:
+    if not df.empty:
+        # STRICT 10-MINUTE WINDOW CUTOFF
+        ten_mins_ago = df["timestamp"].max() - timedelta(minutes=10)
+        df_graphs = df[df["timestamp"] >= ten_mins_ago].copy()
+        
+        df_plot = add_breaks_for_gaps(df_graphs, threshold_seconds=5)
+        
+        st.markdown(f"*Displaying data from **{ten_mins_ago.strftime('%H:%M:%S')}** to **{df['timestamp'].max().strftime('%H:%M:%S')}***")
+        
+        # Helper to create styled dark-themed Plotly charts
+        def create_chart(data, y_col, title, color):
+            fig = px.line(data, x="timestamp", y=y_col, title=title)
+            fig.update_traces(connectgaps=False, line_color=color, line_width=2)
+            fig.update_layout(template="plotly_dark", margin=dict(l=10, r=10, t=35, b=10), height=250)
+            return fig
+
+        g1, g2, g3 = st.columns(3)
+        with g1:
+            st.plotly_chart(create_chart(df_plot, "RPM", "Engine RPM", "#FF4B4B"), use_container_width=True)
+            st.plotly_chart(create_chart(df_plot, "CoolantTemp", "Coolant Temp (°C)", "#FFA500"), use_container_width=True)
+            st.plotly_chart(create_chart(df_plot, "MAP", "MAP Pressure (kPa)", "#AB63FA"), use_container_width=True)
+            st.plotly_chart(create_chart(df_plot, "STFT", "Short Term Fuel Trim (%)", "#E2D9F3"), use_container_width=True)
+            
+        with g2:
+            st.plotly_chart(create_chart(df_plot, "Speed", "Vehicle Speed (km/h)", "#00CC96"), use_container_width=True)
+            st.plotly_chart(create_chart(df_plot, "OilTemp", "Oil Temp (°C)", "#F4D03F"), use_container_width=True)
+            st.plotly_chart(create_chart(df_plot, "IntakeTemp", "Intake Temp (°C)", "#58D68D"), use_container_width=True)
+            st.plotly_chart(create_chart(df_plot, "LTFT", "Long Term Fuel Trim (%)", "#A569BD"), use_container_width=True)
+            
+        with g3:
+            st.plotly_chart(create_chart(df_plot, "EngineLoad", "Engine Load (%)", "#636EFA"), use_container_width=True)
+            st.plotly_chart(create_chart(df_plot, "ThrottlePos", "Throttle Position (%)", "#1ABC9C"), use_container_width=True)
+            st.plotly_chart(create_chart(df_plot, "Voltage", "Battery Voltage (V)", "#F39C12"), use_container_width=True)
+            st.plotly_chart(create_chart(df_plot, "O2Voltage", "O2 Sensor (V)", "#E74C3C"), use_container_width=True)
+            
+    else:
+        st.info("No historical data available yet. Start the engine to generate graphs!")
+
+# ================= TAB 3: TABULAR DATA =================
+with tab3:
+    st.subheader("Raw Database Logs")
+    if not df.empty:
+        # Display most recent first
+        st.dataframe(df.sort_values("timestamp", ascending=False), use_container_width=True)
+    else:
+        st.info("No logs found.")
+
+# ---------------------------------------------------------
+# 7. AUTO-REFRESH LOGIC
+# ---------------------------------------------------------
+if is_online:
+    time.sleep(1) # Refresh fast when driving
     st.rerun()
 else:
-    time.sleep(10)
+    time.sleep(3) # Refresh slowly when offline to save bandwidth
     st.rerun()
