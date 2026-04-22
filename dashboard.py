@@ -124,7 +124,7 @@ with st.sidebar:
 # ---------------------------------------------------------
 # 4. DATA FETCHING & STATUS LOGIC
 # ---------------------------------------------------------
-st.title("🚗 AR Telemetry Command Center")
+st.title("🚗 ARVIS Dashboard")
 
 if device_id:
     latest = get_live_data(device_id)
@@ -201,14 +201,12 @@ with tab1:
         c3.metric("Engine Load", f"{float(latest.get('EngineLoad', 0))} %")
         c4.metric("Throttle", f"{float(latest.get('ThrottlePos', 0))} %")
         
-        st.markdown("<br>", unsafe_allow_html=True)
         c5, c6, c7, c8 = st.columns(4)
         c5.metric("Coolant Temp", f"{float(latest.get('CoolantTemp', 0))} °C")
         c6.metric("Oil Temp", f"{float(latest.get('OilTemp', 0))} °C")
         c7.metric("Intake Temp", f"{float(latest.get('IntakeTemp', 0))} °C")
         c8.metric("Voltage", f"{float(latest.get('Voltage', 0))} V")
         
-        st.markdown("<br>", unsafe_allow_html=True)
         c9, c10, c11, c12 = st.columns(4)
         c9.metric("MAP Pressure", f"{float(latest.get('MAP', 0))} kPa")
         c10.metric("MAF Airflow", f"{float(latest.get('MAF', 0))} g/s")
@@ -218,10 +216,8 @@ with tab1:
         # Show 0s when offline
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("RPM", 0); c2.metric("Speed", "0 km/h"); c3.metric("Engine Load", "0 %"); c4.metric("Throttle", "0 %")
-        st.markdown("<br>", unsafe_allow_html=True)
         c5, c6, c7, c8 = st.columns(4)
         c5.metric("Coolant Temp", "0 °C"); c6.metric("Oil Temp", "0 °C"); c7.metric("Intake Temp", "0 °C"); c8.metric("Voltage", "0 V")
-        st.markdown("<br>", unsafe_allow_html=True)
         c9, c10, c11, c12 = st.columns(4)
         c9.metric("MAP Pressure", "0 kPa"); c10.metric("MAF Airflow", "0 g/s"); c11.metric("STFT / LTFT", "0% / 0%"); c12.metric("O2 Sensor", "0 V")
 
