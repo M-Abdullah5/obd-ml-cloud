@@ -131,15 +131,25 @@ if device_id:
     df = get_history_data(device_id)
     
     if latest:
-        # 🟢 FIX: Ignore timezones! Just check if the data has CHANGED recently.
-        current_data_str = str(latest)
+        # 🟢 FIX: Check absolute time first to prevent showing "Online" instantly when loading old data
+        last_seen = pd.to_datetime(latest["timestamp"])
+        current_time = datetime.utcnow() + timedelta(hours=5)
+        absolute_seconds_ago = (current_time - last_seen).total_seconds()
         
-        if "last_data_str" not in st.session_state or st.session_state.last_data_str != current_data_str:
-            st.session_state.last_data_str = current_data_str
-            st.session_state.last_update_time = time.time()
+        if absolute_seconds_ago > 20:
+            is_online = False
+            # Force reset the session state tracking so it doesn't get stuck
+            st.session_state.last_data_str = str(latest)
+            st.session_state.last_update_time = 0
+        else:
+            current_data_str = str(latest)
             
-        seconds_ago = time.time() - st.session_state.get("last_update_time", time.time())
-        is_online = seconds_ago < 7 
+            if "last_data_str" not in st.session_state or st.session_state.last_data_str != current_data_str:
+                st.session_state.last_data_str = current_data_str
+                st.session_state.last_update_time = time.time()
+                
+            seconds_ago = time.time() - st.session_state.get("last_update_time", time.time())
+            is_online = seconds_ago < 7
     else:
         is_online = False
 else:
