@@ -171,17 +171,27 @@ if is_online:
     st.success("🟢 **SYSTEM ONLINE** — Live Data Streaming Active")
 else:
     if latest:
-        # 🟢 FIX: Use the actual time elapsed since the last data packet arrived at the server.
-        # This completely ignores phone/server clock drift and accurately starts at 0!
-        seconds_offline = time.time() - st.session_state.get("last_update_time", time.time())
-        
-        # If they just hard-refreshed and it's offline, fallback to the timestamp diff
-        if seconds_offline < 10:
-            last_seen = pd.to_datetime(latest["timestamp"])
-            current_time = datetime.utcnow() + timedelta(hours=5)
-            seconds_offline = (current_time - last_seen).total_seconds()
+        # 🟢 FIX: Handle stale session_state from previous code versions (The 686 months bug)
+        last_update = st.session_state.get("last_update_time", time.time())
+        if last_update == 0:
+            last_update = time.time()
+            st.session_state.last_update_time = last_update
             
-        offline_text = format_offline_duration(seconds_offline)
+        seconds_offline = time.time() - last_update
+        
+        # Calculate the absolute time difference from the data's timestamp
+        last_seen = pd.to_datetime(latest["timestamp"])
+        current_time = datetime.utcnow() + timedelta(hours=5)
+        timestamp_offline = (current_time - last_seen).total_seconds()
+        
+        # 🟢 FIX: Blended Timer Logic
+        # - Subtract 60 seconds from timestamp to completely erase the clock drift error.
+        # - Use max() so that if you just opened the browser (seconds_offline is small) 
+        #   but the car has been off for 5 hours, it correctly shows 5 hours!
+        # - But if the car just turned off, it smoothly counts up from 0 using the session timer.
+        final_offline_seconds = max(seconds_offline, timestamp_offline - 60)
+            
+        offline_text = format_offline_duration(final_offline_seconds)
         st.error(f"🔴 **SYSTEM OFFLINE** — Engine off for {offline_text}")
     else:
         st.error("🔴 **SYSTEM OFFLINE** — No vehicle connected.")
