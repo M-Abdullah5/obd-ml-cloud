@@ -127,12 +127,26 @@ with st.sidebar:
 st.title("🚗 ARVIS Dashboard")
 
 if device_id:
-    latest = get_live_data(device_id)
+    latest_raw = get_live_data(device_id)
     df = get_history_data(device_id)
     
-    if latest:
-        # 🟢 FIX: Check absolute time first to prevent showing "Online" instantly when loading old data
-        last_seen = pd.to_datetime(latest["timestamp"])
+    if latest_raw:
+        # 🟢 FIX: Prevent "Dashboard Fighting Itself" during bulk offline uploads
+        # Asynchronous threads can upload older packets out-of-order. 
+        # We must ignore any packet that is OLDER than the newest one we've seen!
+        incoming_time = pd.to_datetime(latest_raw["timestamp"])
+        
+        if "highest_timestamp" not in st.session_state:
+            st.session_state.highest_timestamp = incoming_time
+            st.session_state.highest_latest = latest_raw
+        elif incoming_time > st.session_state.highest_timestamp:
+            st.session_state.highest_timestamp = incoming_time
+            st.session_state.highest_latest = latest_raw
+            
+        # Use the highest valid data
+        latest = st.session_state.highest_latest
+        last_seen = st.session_state.highest_timestamp
+        
         current_time = datetime.utcnow() + timedelta(hours=5)
         absolute_seconds_ago = (current_time - last_seen).total_seconds()
         
@@ -152,6 +166,7 @@ if device_id:
             is_online = seconds_ago < 7
     else:
         is_online = False
+        latest = None
 else:
     is_online = False
     latest = None
