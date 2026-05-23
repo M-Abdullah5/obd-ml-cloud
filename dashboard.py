@@ -79,11 +79,12 @@ def get_live_data(device_id):
     except: pass
     return None
 
-@st.cache_data(ttl=5)
+@st.cache_data(ttl=15)
 def get_history_data(device_id):
     try:
-        # Fetch latest 25000 records (approx 3.5 hours at 2Hz)
-        res = requests.get(f"{FIREBASE_DB_URL}history/{device_id}.json?orderBy=\"$key\"&limitToLast=25000")
+        # Fetch latest 6000 records (approx 3 hours at 1 packet per 2 seconds)
+        # 🟢 FIX: Reduced from 25,000 to drastically speed up dashboard loading times!
+        res = requests.get(f"{FIREBASE_DB_URL}history/{device_id}.json?orderBy=\"$key\"&limitToLast=6000")
         if res.status_code == 200 and res.json():
             records = list(res.json().values())
             df = pd.DataFrame(records)
@@ -164,7 +165,7 @@ if device_id:
             # force the session into an Offline state instantly.
             last_seen = pd.to_datetime(latest["timestamp"])
             current_time = datetime.utcnow() + timedelta(hours=5)
-            if (current_time - last_seen).total_seconds() > 60:
+            if abs((current_time - last_seen).total_seconds()) > 60:
                 st.session_state.last_update_time = 0
             else:
                 st.session_state.last_update_time = time.time()
