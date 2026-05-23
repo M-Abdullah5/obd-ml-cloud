@@ -152,12 +152,29 @@ if device_id:
         # We now purely rely on whether new data is actively arriving.
         current_data_str = str(latest)
         
-        if "last_data_str" not in st.session_state or st.session_state.last_data_str != current_data_str:
+        if "last_data_str" not in st.session_state:
+            st.session_state.last_data_str = current_data_str
+            
+            # 🟢 FIX: Prevent "False Online" on startup!
+            # If the database timestamp is clearly > 60s old (ignoring clock drift),
+            # force the session into an Offline state instantly.
+            last_seen = pd.to_datetime(latest["timestamp"])
+            current_time = datetime.utcnow() + timedelta(hours=5)
+            if (current_time - last_seen).total_seconds() > 60:
+                st.session_state.last_update_time = 0
+            else:
+                st.session_state.last_update_time = time.time()
+                
+        elif st.session_state.last_data_str != current_data_str:
             st.session_state.last_data_str = current_data_str
             st.session_state.last_update_time = time.time()
             
-        seconds_ago = time.time() - st.session_state.get("last_update_time", time.time())
-        is_online = seconds_ago < 10
+        last_update = st.session_state.get("last_update_time", time.time())
+        if last_update == 0:
+            is_online = False
+        else:
+            seconds_ago = time.time() - last_update
+            is_online = seconds_ago < 10
     else:
         is_online = False
         latest = None
@@ -171,25 +188,20 @@ if is_online:
     st.success("🟢 **SYSTEM ONLINE** — Live Data Streaming Active")
 else:
     if latest:
-        # 🟢 FIX: Handle stale session_state from previous code versions (The 686 months bug)
+        # 🟢 FIX: Safely read last_update without triggering the 1970 Epoch bug
         last_update = st.session_state.get("last_update_time", time.time())
-        if last_update == 0:
-            last_update = time.time()
-            st.session_state.last_update_time = last_update
-            
-        seconds_offline = time.time() - last_update
+        seconds_offline = 0 if last_update == 0 else (time.time() - last_update)
         
         # Calculate the absolute time difference from the data's timestamp
         last_seen = pd.to_datetime(latest["timestamp"])
         current_time = datetime.utcnow() + timedelta(hours=5)
         timestamp_offline = (current_time - last_seen).total_seconds()
         
-        # 🟢 FIX: Blended Timer Logic
-        # - Subtract 60 seconds from timestamp to completely erase the clock drift error.
-        # - Use max() so that if you just opened the browser (seconds_offline is small) 
-        #   but the car has been off for 5 hours, it correctly shows 5 hours!
-        # - But if the car just turned off, it smoothly counts up from 0 using the session timer.
+        # Blended Timer Logic
         final_offline_seconds = max(seconds_offline, timestamp_offline - 60)
+        
+        # Prevent negative seconds if clock drift is weird
+        if final_offline_seconds < 0: final_offline_seconds = 0
             
         offline_text = format_offline_duration(final_offline_seconds)
         st.error(f"🔴 **SYSTEM OFFLINE** — Engine off for {offline_text}")
