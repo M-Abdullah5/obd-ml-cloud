@@ -5,6 +5,9 @@ from fastapi import FastAPI, BackgroundTasks, Request
 from pydantic import BaseModel
 import uvicorn
 
+# 🟢 FIX: Use a global session to pool connections and prevent socket exhaustion during rapid bulk uploads!
+session = requests.Session()
+
 app = FastAPI(title="OBD ML Server")
 
 # Your Firebase Database URL
@@ -53,39 +56,50 @@ def process_and_upload(data: VehicleData):
     # ---------------------------------------------------------
     # ☁️ FIREBASE UPLOAD
     # ---------------------------------------------------------
-    # 1. Update the "Live" state for the dashboard speedometers
-    live_payload = data.dict()
-    live_payload["ml_status"] = status
-    live_payload["ml_alert"] = alert_msg
-    
-    live_url = f"{FIREBASE_DB_URL}live/{data.device_id}.json"
-    requests.put(live_url, json=live_payload)
-    
-    # 2. Append to "History" for the dashboard graphs
-    # We use a timestamp key so Firebase automatically orders it
-    time_key = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-    history_url = f"{FIREBASE_DB_URL}history/{data.device_id}/{time_key}.json"
-    
-    # Only save the crucial data for graphs to save Firebase storage
-    history_payload = {
-        "timestamp": live_payload["timestamp"],
-        "RPM": data.RPM,
-        "Speed": data.Speed,
-        "CoolantTemp": data.CoolantTemp,
-        "EngineLoad": data.EngineLoad,
-        "Voltage": data.Voltage
-    }
-    requests.put(history_url, json=history_payload)
-    
-    # 3. Trim History (Keep only the last 2000 records to prevent Firebase from filling up)
-    trim_history(data.device_id)
+    try:
+        # 1. Update the "Live" state for the dashboard speedometers
+        live_payload = data.dict()
+        live_payload["ml_status"] = status
+        live_payload["ml_alert"] = alert_msg
+        
+        live_url = f"{FIREBASE_DB_URL}live/{data.device_id}.json"
+        session.put(live_url, json=live_payload, timeout=5)
+        
+        # 2. Append to "History" for the dashboard graphs
+        time_key = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        history_url = f"{FIREBASE_DB_URL}history/{data.device_id}/{time_key}.json"
+        
+        # 🟢 FIX: Save ALL data so the raw table doesn't show 0s!
+        history_payload = {
+            "timestamp": live_payload["timestamp"],
+            "RPM": data.RPM,
+            "Speed": data.Speed,
+            "CoolantTemp": data.CoolantTemp,
+            "EngineLoad": data.EngineLoad,
+            "Voltage": data.Voltage,
+            "IntakeTemp": data.IntakeTemp,
+            "MAF": data.MAF,
+            "ThrottlePos": data.ThrottlePos,
+            "OilTemp": data.OilTemp,
+            "MAP": data.MAP,
+            "FuelLevel": data.FuelLevel,
+            "STFT": data.STFT,
+            "LTFT": data.LTFT,
+            "O2Voltage": data.O2Voltage
+        }
+        session.put(history_url, json=history_payload, timeout=5)
+        
+        # 3. Trim History
+        trim_history(data.device_id)
+    except Exception as e:
+        print(f"Firebase Upload Error: {e}")
 
 def trim_history(device_id: str):
     """ Deletes old records if the history gets too large """
     try:
         # Fetch only the keys (shallow=true) to save bandwidth
         history_url = f"{FIREBASE_DB_URL}history/{device_id}.json?shallow=true"
-        response = requests.get(history_url)
+        response = session.get(history_url, timeout=5)
         if response.status_code == 200 and response.json():
             keys = sorted(list(response.json().keys()))
             if len(keys) > 2000:
@@ -93,7 +107,7 @@ def trim_history(device_id: str):
                 keys_to_delete = keys[:-2000]
                 for key in keys_to_delete:
                     del_url = f"{FIREBASE_DB_URL}history/{device_id}/{key}.json"
-                    requests.delete(del_url)
+                    session.delete(del_url, timeout=5)
     except Exception as e:
         print("Trim error:", e)
 
