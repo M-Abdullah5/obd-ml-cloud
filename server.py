@@ -1,6 +1,7 @@
 import os
 import requests
 from datetime import datetime
+from typing import List, Union
 from fastapi import FastAPI, BackgroundTasks, Request
 from pydantic import BaseModel
 import uvicorn
@@ -66,7 +67,13 @@ def process_and_upload(data: VehicleData):
         session.put(live_url, json=live_payload, timeout=5)
         
         # 2. Append to "History" for the dashboard graphs
-        time_key = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        # 🟢 FIX: Use the actual timestamp from the app so delayed uploads stay in perfectly sorted order!
+        try:
+            dt = datetime.strptime(data.timestamp, "%Y-%m-%d %H:%M:%S")
+            time_key = dt.strftime("%Y%m%d_%H%M%S")
+        except:
+            time_key = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            
         history_url = f"{FIREBASE_DB_URL}history/{data.device_id}/{time_key}.json"
         
         # 🟢 FIX: Save ALL data so the raw table doesn't show 0s!
@@ -111,14 +118,54 @@ def trim_history(device_id: str):
     except Exception as e:
         print("Trim error:", e)
 
+def process_bulk_upload(data_list: List[VehicleData]):
+    """ Bulk uploads an entire queue to Firebase in a single blazing fast request """
+    if not data_list:
+        return
+        
+    try:
+        latest = data_list[-1]
+        
+        # 1. Update Live (Only the most recent packet)
+        live_payload = latest.dict()
+        live_payload["ml_status"] = "Healthy"
+        live_payload["ml_alert"] = "None"
+        session.put(f"{FIREBASE_DB_URL}live/{latest.device_id}.json", json=live_payload, timeout=5)
+        
+        # 2. Update History in Bulk (ALL packets at once using PATCH)
+        history_updates = {}
+        for d in data_list:
+            try:
+                dt = datetime.strptime(d.timestamp, "%Y-%m-%d %H:%M:%S")
+                time_key = dt.strftime("%Y%m%d_%H%M%S")
+            except:
+                time_key = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            
+            # Ensure no missing fields
+            payload = d.dict()
+            history_updates[time_key] = payload
+            
+        patch_url = f"{FIREBASE_DB_URL}history/{latest.device_id}.json"
+        session.patch(patch_url, json=history_updates, timeout=15)
+        
+        # 3. Trim History
+        trim_history(latest.device_id)
+        
+    except Exception as e:
+        print(f"Bulk Upload Error: {e}")
+
 @app.post("/api/upload")
-async def upload_data(data: VehicleData, background_tasks: BackgroundTasks):
+async def upload_data(data: Union[VehicleData, List[VehicleData]], background_tasks: BackgroundTasks):
     """
     Unity sends data here. We immediately return 200 OK so Unity doesn't freeze,
     then we process the ML and Firebase upload in the background.
     """
-    background_tasks.add_task(process_and_upload, data)
-    return {"status": "success", "message": "Data received and processing"}
+    if isinstance(data, list):
+        background_tasks.add_task(process_bulk_upload, data)
+        return {"status": "success", "message": f"Bulk processing {len(data)} items"}
+    else:
+        background_tasks.add_task(process_and_upload, data)
+        return {"status": "success", "message": "Data received and processing"}
 
 @app.get("/")
 def health_check():
