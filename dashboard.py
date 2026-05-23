@@ -103,7 +103,11 @@ def get_history_data(device_id):
 # 3. SIDEBAR (FILLED WITH CONTEXT)
 # ---------------------------------------------------------
 with st.sidebar:
-    st.image("ARVIS.png", width=80)
+    # 🟢 FIX: Use columns to perfectly center the new transparent logo and make it larger!
+    c1, c2, c3 = st.columns([1, 3, 1])
+    with c2:
+        st.image("ARVIS2.png", use_column_width=True)
+        
     st.title("Vehicle Profile")
     
     devices = get_devices()
