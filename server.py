@@ -1,7 +1,7 @@
 import os
 import requests
 from datetime import datetime
-from typing import List, Union
+from typing import List
 from fastapi import FastAPI, BackgroundTasks, Request
 from pydantic import BaseModel
 import uvicorn
@@ -155,17 +155,13 @@ def process_bulk_upload(data_list: List[VehicleData]):
         print(f"Bulk Upload Error: {e}")
 
 @app.post("/api/upload")
-async def upload_data(data: Union[VehicleData, List[VehicleData]], background_tasks: BackgroundTasks):
+async def upload_data(data: List[VehicleData], background_tasks: BackgroundTasks):
     """
-    Unity sends data here. We immediately return 200 OK so Unity doesn't freeze,
-    then we process the ML and Firebase upload in the background.
+    Unity sends data here as a JSON array (bulk upload).
+    We process the ML and Firebase upload in the background.
     """
-    if isinstance(data, list):
-        background_tasks.add_task(process_bulk_upload, data)
-        return {"status": "success", "message": f"Bulk processing {len(data)} items"}
-    else:
-        background_tasks.add_task(process_and_upload, data)
-        return {"status": "success", "message": "Data received and processing"}
+    background_tasks.add_task(process_bulk_upload, data)
+    return {"status": "success", "message": f"Bulk processing {len(data)} items"}
 
 @app.get("/")
 def health_check():
