@@ -145,25 +145,19 @@ if device_id:
             
         # Use the highest valid data
         latest = st.session_state.highest_latest
-        last_seen = st.session_state.highest_timestamp
         
-        current_time = datetime.utcnow() + timedelta(hours=5)
-        absolute_seconds_ago = (current_time - last_seen).total_seconds()
+        # 🟢 FIX: Removed the 'absolute_seconds_ago' check. 
+        # Comparing the Phone's clock to the Server's clock causes false "Offline" statuses 
+        # if the phone's clock is drifted by even 20 seconds.
+        # We now purely rely on whether new data is actively arriving.
+        current_data_str = str(latest)
         
-        if absolute_seconds_ago > 20:
-            is_online = False
-            # Force reset the session state tracking so it doesn't get stuck
-            st.session_state.last_data_str = str(latest)
-            st.session_state.last_update_time = 0
-        else:
-            current_data_str = str(latest)
+        if "last_data_str" not in st.session_state or st.session_state.last_data_str != current_data_str:
+            st.session_state.last_data_str = current_data_str
+            st.session_state.last_update_time = time.time()
             
-            if "last_data_str" not in st.session_state or st.session_state.last_data_str != current_data_str:
-                st.session_state.last_data_str = current_data_str
-                st.session_state.last_update_time = time.time()
-                
-            seconds_ago = time.time() - st.session_state.get("last_update_time", time.time())
-            is_online = seconds_ago < 7
+        seconds_ago = time.time() - st.session_state.get("last_update_time", time.time())
+        is_online = seconds_ago < 10
     else:
         is_online = False
         latest = None
@@ -177,11 +171,17 @@ if is_online:
     st.success("🟢 **SYSTEM ONLINE** — Live Data Streaming Active")
 else:
     if latest:
-        # Calculate real offline duration using UTC+5 to match your Unity App timezone
-        last_seen = pd.to_datetime(latest["timestamp"])
-        current_time = datetime.utcnow() + timedelta(hours=5)
-        offline_seconds = (current_time - last_seen).total_seconds()
-        offline_text = format_offline_duration(offline_seconds)
+        # 🟢 FIX: Use the actual time elapsed since the last data packet arrived at the server.
+        # This completely ignores phone/server clock drift and accurately starts at 0!
+        seconds_offline = time.time() - st.session_state.get("last_update_time", time.time())
+        
+        # If they just hard-refreshed and it's offline, fallback to the timestamp diff
+        if seconds_offline < 10:
+            last_seen = pd.to_datetime(latest["timestamp"])
+            current_time = datetime.utcnow() + timedelta(hours=5)
+            seconds_offline = (current_time - last_seen).total_seconds()
+            
+        offline_text = format_offline_duration(seconds_offline)
         st.error(f"🔴 **SYSTEM OFFLINE** — Engine off for {offline_text}")
     else:
         st.error("🔴 **SYSTEM OFFLINE** — No vehicle connected.")
