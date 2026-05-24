@@ -189,7 +189,10 @@ if device_id:
         # we strictly compare the newest packet's timestamp to the true UTC+5 time!
         try:
             last_seen = pd.to_datetime(latest["timestamp"])
-            current_time = datetime.utcnow() + timedelta(hours=5)
+            
+            # 🟢 FIX: Absolute UTC Processing
+            # We now compare pure UTC to pure UTC. No timezone manipulation is done until visual rendering.
+            current_time = datetime.utcnow()
             seconds_ago = abs((current_time - last_seen).total_seconds())
             
             # System Online (Green Banner) status stays active for 10 seconds to prevent flickering
@@ -288,6 +291,9 @@ with tab2:
         df_graphs = df[df["timestamp"] >= five_mins_ago].copy()
         
         df_plot = add_breaks_for_gaps(df_graphs, threshold_seconds=5)
+        
+        # 🟢 FIX: Convert pure UTC to Pakistan Local Time (UTC+5) ONLY for the visual graphs
+        df_plot['timestamp'] = df_plot['timestamp'] + pd.Timedelta(hours=5)
 
         # 🟢 FIX: Drastic Performance Optimization
         # We completely removed Plotly (which is extremely heavy for the server) 
@@ -335,9 +341,10 @@ with tab3:
         df_table = df.copy()
         
         # Clean up the format so it's not messy!
-        # Separate the timestamp into dedicated Date and exact Time (with seconds) columns
-        df_table['Date'] = df_table['timestamp'].dt.strftime('%Y-%m-%d')
-        df_table['Time (Local)'] = df_table['timestamp'].dt.strftime('%H:%M:%S')
+        # Convert absolute UTC to Pakistan Local Time (UTC+5) for the raw data logs
+        local_timestamps = df_table['timestamp'] + pd.Timedelta(hours=5)
+        df_table['Date'] = local_timestamps.dt.strftime('%Y-%m-%d')
+        df_table['Time (Local)'] = local_timestamps.dt.strftime('%H:%M:%S')
         
         # Reorder columns to put Date and Time first, drop the raw timestamp
         cols = ['Date', 'Time (Local)'] + [c for c in df_table.columns if c not in ['Date', 'Time (Local)', 'timestamp']]
