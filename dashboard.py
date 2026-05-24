@@ -247,32 +247,41 @@ with tab2:
         df_graphs = df[df["timestamp"] >= five_mins_ago].copy()
         
         df_plot = add_breaks_for_gaps(df_graphs, threshold_seconds=5)
-        
-        # Helper to create styled dark-themed Plotly charts
-        def create_chart(data, y_col, title, color):
-            fig = px.line(data, x="timestamp", y=y_col, title=title)
-            fig.update_traces(connectgaps=False, line_color=color, line_width=2)
-            fig.update_layout(template="plotly_dark", margin=dict(l=10, r=10, t=35, b=10), height=250)
-            return fig
 
+        # 🟢 FIX: Drastic Performance Optimization
+        # We completely removed Plotly (which is extremely heavy for the server) 
+        # and replaced it with Streamlit's native Altair line_charts.
+        # This shifts the rendering load to the browser, making it run lightning-fast!
         g1, g2, g3 = st.columns(3)
         with g1:
-            st.plotly_chart(create_chart(df_plot, "RPM", "Engine RPM", "#FF4B4B"), use_container_width=True)
-            st.plotly_chart(create_chart(df_plot, "CoolantTemp", "Coolant Temp (°C)", "#FFA500"), use_container_width=True)
-            st.plotly_chart(create_chart(df_plot, "MAP", "MAP Pressure (kPa)", "#AB63FA"), use_container_width=True)
-            st.plotly_chart(create_chart(df_plot, "STFT", "Short Term Fuel Trim (%)", "#E2D9F3"), use_container_width=True)
+            st.markdown("###### Engine RPM")
+            st.line_chart(df_plot, x="timestamp", y="RPM", color="#FF4B4B", height=200, use_container_width=True)
+            st.markdown("###### Coolant Temp (°C)")
+            st.line_chart(df_plot, x="timestamp", y="CoolantTemp", color="#FFA500", height=200, use_container_width=True)
+            st.markdown("###### MAP Pressure (kPa)")
+            st.line_chart(df_plot, x="timestamp", y="MAP", color="#AB63FA", height=200, use_container_width=True)
+            st.markdown("###### Short Term Fuel Trim (%)")
+            st.line_chart(df_plot, x="timestamp", y="STFT", color="#E2D9F3", height=200, use_container_width=True)
             
         with g2:
-            st.plotly_chart(create_chart(df_plot, "Speed", "Vehicle Speed (km/h)", "#00CC96"), use_container_width=True)
-            st.plotly_chart(create_chart(df_plot, "OilTemp", "Oil Temp (°C)", "#F4D03F"), use_container_width=True)
-            st.plotly_chart(create_chart(df_plot, "IntakeTemp", "Intake Temp (°C)", "#58D68D"), use_container_width=True)
-            st.plotly_chart(create_chart(df_plot, "LTFT", "Long Term Fuel Trim (%)", "#A569BD"), use_container_width=True)
+            st.markdown("###### Vehicle Speed (km/h)")
+            st.line_chart(df_plot, x="timestamp", y="Speed", color="#00CC96", height=200, use_container_width=True)
+            st.markdown("###### Oil Temp (°C)")
+            st.line_chart(df_plot, x="timestamp", y="OilTemp", color="#F4D03F", height=200, use_container_width=True)
+            st.markdown("###### Intake Temp (°C)")
+            st.line_chart(df_plot, x="timestamp", y="IntakeTemp", color="#58D68D", height=200, use_container_width=True)
+            st.markdown("###### Long Term Fuel Trim (%)")
+            st.line_chart(df_plot, x="timestamp", y="LTFT", color="#A569BD", height=200, use_container_width=True)
             
         with g3:
-            st.plotly_chart(create_chart(df_plot, "EngineLoad", "Engine Load (%)", "#636EFA"), use_container_width=True)
-            st.plotly_chart(create_chart(df_plot, "ThrottlePos", "Throttle Position (%)", "#1ABC9C"), use_container_width=True)
-            st.plotly_chart(create_chart(df_plot, "Voltage", "Battery Voltage (V)", "#F39C12"), use_container_width=True)
-            st.plotly_chart(create_chart(df_plot, "O2Voltage", "O2 Sensor (V)", "#E74C3C"), use_container_width=True)
+            st.markdown("###### Engine Load (%)")
+            st.line_chart(df_plot, x="timestamp", y="EngineLoad", color="#636EFA", height=200, use_container_width=True)
+            st.markdown("###### Throttle Position (%)")
+            st.line_chart(df_plot, x="timestamp", y="ThrottlePos", color="#1ABC9C", height=200, use_container_width=True)
+            st.markdown("###### Battery Voltage (V)")
+            st.line_chart(df_plot, x="timestamp", y="Voltage", color="#F39C12", height=200, use_container_width=True)
+            st.markdown("###### O2 Sensor (V)")
+            st.line_chart(df_plot, x="timestamp", y="O2Voltage", color="#E74C3C", height=200, use_container_width=True)
             
     else:
         st.info("No historical data available yet. Start the engine to generate graphs!")
@@ -305,9 +314,12 @@ with tab3:
 # ---------------------------------------------------------
 # 7. AUTO-REFRESH LOGIC
 # ---------------------------------------------------------
+# 🟢 FIX: Optimized Refresh Rates
+# Refreshing too fast blocks the browser and creates lag/stuttering. 
+# Unity only uploads every 2 seconds anyway!
 if is_online:
-    time.sleep(1) # Refresh fast when driving
+    time.sleep(2) # Sync perfectly with Unity's 2-second rate
     st.rerun()
 else:
-    time.sleep(3) # Refresh slowly when offline to save bandwidth
+    time.sleep(5) # Slow down when offline to completely unblock the server
     st.rerun()
