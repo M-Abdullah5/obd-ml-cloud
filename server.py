@@ -126,11 +126,24 @@ def process_bulk_upload(data_list: List[VehicleData]):
     try:
         latest = data_list[-1]
         
-        # 1. Update Live (Only the most recent packet)
-        live_payload = latest.dict()
-        live_payload["ml_status"] = "Healthy"
-        live_payload["ml_alert"] = "None"
-        session.put(f"{FIREBASE_DB_URL}live/{latest.device_id}.json", json=live_payload, timeout=5)
+        # 🟢 FIX: CLOSED LOOP CHECKER
+        # Do NOT update the Live node with offline cache data! 
+        # Explicitly check if the packet is less than 15 seconds old.
+        is_live = False
+        try:
+            dt = datetime.strptime(latest.timestamp, "%Y-%m-%d %H:%M:%S")
+            if abs((datetime.now() - dt).total_seconds()) < 15:
+                is_live = True
+        except:
+            is_live = True
+
+        if is_live:
+            # 1. Update Live (Only the most recent packet)
+            live_payload = latest.dict()
+            live_payload["ml_status"] = "Healthy"
+            live_payload["ml_alert"] = "None"
+            # raise_for_status() ensures we fail loudly if Firebase rejects it!
+            session.put(f"{FIREBASE_DB_URL}live/{latest.device_id}.json", json=live_payload, timeout=5).raise_for_status()
         
         # 2. Update History in Bulk (ALL packets at once using PATCH)
         history_updates = {}
@@ -146,21 +159,30 @@ def process_bulk_upload(data_list: List[VehicleData]):
             history_updates[time_key] = payload
             
         patch_url = f"{FIREBASE_DB_URL}history/{latest.device_id}.json"
-        session.patch(patch_url, json=history_updates, timeout=15)
+        
+        # 🟢 FIX: CLOSED LOOP CONFIRMATION
+        # raise_for_status() will instantly crash this function if Firebase fails.
+        # This prevents Unity from deleting its cache if Firebase didn't actually save the data!
+        session.patch(patch_url, json=history_updates, timeout=15).raise_for_status()
         
         # 3. Trim History
         trim_history(latest.device_id)
         
     except Exception as e:
         print(f"Bulk Upload Error: {e}")
+        # Re-raise the exception so FastAPI returns a 500 Server Error to Unity, 
+        # forcing Unity to keep the data in its offline cache for a retry!
+        raise e
 
 @app.post("/api/upload")
-async def upload_data(data: List[VehicleData], background_tasks: BackgroundTasks):
+async def upload_data(data: List[VehicleData]):
     """
     Unity sends data here as a JSON array (bulk upload).
-    We process the ML and Firebase upload in the background.
+    🟢 FIX: We intentionally REMOVED background_tasks!
+    We now strictly wait for Firebase to successfully save the data BEFORE returning 200 OK.
+    This creates a closed-loop system guaranteeing zero data loss.
     """
-    background_tasks.add_task(process_bulk_upload, data)
+    process_bulk_upload(data)
     return {"status": "success", "message": f"Bulk processing {len(data)} items"}
 
 @app.get("/")
