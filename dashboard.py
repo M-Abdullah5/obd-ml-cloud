@@ -80,22 +80,28 @@ def get_live_data(device_id):
     return None
 
 @st.cache_data(ttl=15)
-def get_history_data(device_id):
+def get_recent_history_data(device_id):
     try:
-        # Fetch latest 6000 records (approx 3 hours at 1 packet per 2 seconds)
-        # 🟢 FIX: Reduced from 25,000 to drastically speed up dashboard loading times!
+        # Fetch only the last 50 records (approx 1.5 minutes) for the incremental cache update!
+        # Payload size is practically zero, making it infinitely fast.
+        res = requests.get(f"{FIREBASE_DB_URL}history/{device_id}.json?orderBy=\"$key\"&limitToLast=50")
+        if res.status_code == 200 and res.json():
+            records = list(res.json().values())
+            df = pd.DataFrame(records)
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            return df
+    except: pass
+    return pd.DataFrame()
+
+@st.cache_data(ttl=3600)
+def get_full_history_data(device_id):
+    """ Only called ONCE when the dashboard first loads to build the initial 3-hour cache """
+    try:
         res = requests.get(f"{FIREBASE_DB_URL}history/{device_id}.json?orderBy=\"$key\"&limitToLast=6000")
         if res.status_code == 200 and res.json():
             records = list(res.json().values())
             df = pd.DataFrame(records)
             df['timestamp'] = pd.to_datetime(df['timestamp'])
-            
-            # Ensure ALL 14 columns exist to prevent Plotly crashes
-            expected_cols = ["RPM", "Speed", "CoolantTemp", "EngineLoad", "Voltage", 
-                             "IntakeTemp", "MAF", "ThrottlePos", "OilTemp", "MAP", 
-                             "FuelLevel", "STFT", "LTFT", "O2Voltage"]
-            for col in expected_cols:
-                if col not in df.columns: df[col] = 0.0
             return df
     except: pass
     return pd.DataFrame()
@@ -131,9 +137,35 @@ with st.sidebar:
 # ---------------------------------------------------------
 st.title("🚗 ARVIS Dashboard")
 
-if device_id:
-    latest_raw = get_live_data(device_id)
-    df = get_history_data(device_id)
+if selected_device:
+    latest_raw = get_live_data(selected_device)
+    
+    # 🟢 FIX: INCREMENTAL CACHING ENGINE
+    # Download the heavy 3-hour log ONLY ONCE. Then, just download the tiny 1.5-minute chunk
+    # and glue it to the existing dataframe in memory!
+    recent_df = get_recent_history_data(selected_device)
+    
+    if "full_history_df" not in st.session_state:
+        st.session_state.full_history_df = get_full_history_data(selected_device)
+        
+    if not recent_df.empty:
+        # Append the new records and drop duplicates instantly
+        combined = pd.concat([st.session_state.full_history_df, recent_df])
+        combined = combined.drop_duplicates(subset=['timestamp']).sort_values('timestamp')
+        
+        # Trim to keep only the last 3 hours to prevent RAM from exploding over days
+        three_hours_ago = combined['timestamp'].max() - timedelta(hours=3)
+        st.session_state.full_history_df = combined[combined['timestamp'] >= three_hours_ago]
+        
+    df = st.session_state.full_history_df
+    
+    # Ensure ALL columns exist to prevent crashes
+    expected_cols = ["RPM", "Speed", "CoolantTemp", "EngineLoad", "Voltage", 
+                     "IntakeTemp", "MAF", "ThrottlePos", "OilTemp", "MAP", 
+                     "FuelLevel", "STFT", "LTFT", "O2Voltage"]
+    if not df.empty:
+        for col in expected_cols:
+            if col not in df.columns: df[col] = 0.0
     
     if latest_raw:
         # 🟢 FIX: Prevent "Dashboard Fighting Itself" during bulk offline uploads
@@ -158,14 +190,22 @@ if device_id:
             last_seen = pd.to_datetime(latest["timestamp"])
             current_time = datetime.utcnow() + timedelta(hours=5)
             seconds_ago = abs((current_time - last_seen).total_seconds())
-            is_online = seconds_ago < 10
+            
+            # System Online (Green Banner) status stays active for 10 seconds to prevent flickering
+            is_online = seconds_ago <= 10
+            
+            # Live Metrics numbers are ONLY shown if data is 4 seconds fresh or less!
+            is_live_data_fresh = seconds_ago <= 4
         except:
             is_online = False
+            is_live_data_fresh = False
     else:
         is_online = False
+        is_live_data_fresh = False
         latest = None
 else:
     is_online = False
+    is_live_data_fresh = False
     latest = None
     df = pd.DataFrame()
 
@@ -212,7 +252,7 @@ tab1, tab2, tab3 = st.tabs(["📊 Live Metrics", "📈 Graphs", "📝 Raw Histor
 with tab1:
     st.subheader("Real-Time Engine Status")
     
-    if latest and is_online:
+    if latest and is_online and is_live_data_fresh:
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("RPM", int(latest.get("RPM", 0)))
         c2.metric("Speed", f"{int(latest.get('Speed', 0))} km/h")
@@ -231,13 +271,13 @@ with tab1:
         c11.metric("STFT / LTFT", f"{float(latest.get('STFT', 0))}% / {float(latest.get('LTFT', 0))}%")
         c12.metric("O2 Sensor", f"{float(latest.get('O2Voltage', 0))} V")
     else:
-        # Show 0s when offline
+        # Show stale indicators when the feed pauses > 4 seconds
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("RPM", 0); c2.metric("Speed", "0 km/h"); c3.metric("Engine Load", "0 %"); c4.metric("Throttle", "0 %")
+        c1.metric("RPM", "--"); c2.metric("Speed", "-- km/h"); c3.metric("Engine Load", "-- %"); c4.metric("Throttle", "-- %")
         c5, c6, c7, c8 = st.columns(4)
-        c5.metric("Coolant Temp", "0 °C"); c6.metric("Oil Temp", "0 °C"); c7.metric("Intake Temp", "0 °C"); c8.metric("Voltage", "0 V")
+        c5.metric("Coolant Temp", "-- °C"); c6.metric("Oil Temp", "-- °C"); c7.metric("Intake Temp", "-- °C"); c8.metric("Voltage", "-- V")
         c9, c10, c11, c12 = st.columns(4)
-        c9.metric("MAP Pressure", "0 kPa"); c10.metric("MAF Airflow", "0 g/s"); c11.metric("STFT / LTFT", "0% / 0%"); c12.metric("O2 Sensor", "0 V")
+        c9.metric("MAP Pressure", "-- kPa"); c10.metric("MAF Airflow", "-- g/s"); c11.metric("STFT / LTFT", "--% / --%"); c12.metric("O2 Sensor", "-- V")
 
 # ================= TAB 2: GRAPHS (LAST 5 MINS) =================
 with tab2:
@@ -286,28 +326,26 @@ with tab2:
     else:
         st.info("No historical data available yet. Start the engine to generate graphs!")
 
-# ================= TAB 3: TABULAR DATA (LAST 3 HOURS) =================
+# ================= TAB 3: TABULAR DATA =================
 with tab3:
     st.subheader("Historical Telemetry Log")
+    
     if not df.empty:
-        # Filter for strictly the last 3 hours based on the latest data packet
-        three_hours_ago = df["timestamp"].max() - timedelta(hours=3)
-        df_table = df[df["timestamp"] >= three_hours_ago].copy()
+        df_table = df.copy()
         
-        if df_table.empty:
-            st.info("No online activity detected for the last 3 hours.")
-        else:
-            # Clean up the format so it's not messy!
-            # Separate the timestamp into dedicated Date and exact Time (with seconds) columns
-            df_table['Date'] = df_table['timestamp'].dt.strftime('%Y-%m-%d')
-            df_table['Time (Local)'] = df_table['timestamp'].dt.strftime('%H:%M:%S')
+        # Clean up the format so it's not messy!
+        # Separate the timestamp into dedicated Date and exact Time (with seconds) columns
+        df_table['Date'] = df_table['timestamp'].dt.strftime('%Y-%m-%d')
+        df_table['Time (Local)'] = df_table['timestamp'].dt.strftime('%H:%M:%S')
+        
+        # Reorder columns to put Date and Time first, drop the raw timestamp
+        cols = ['Date', 'Time (Local)'] + [c for c in df_table.columns if c not in ['Date', 'Time (Local)', 'timestamp']]
+        df_table = df_table[cols]
+        
+        st.caption("Displaying the full 3-hour history seamlessly from the local memory cache.")
             
-            # Reorder columns to put Date and Time first, drop the raw timestamp
-            cols = ['Date', 'Time (Local)'] + [c for c in df_table.columns if c not in ['Date', 'Time (Local)', 'timestamp']]
-            df_table = df_table[cols]
-            
-            # Display perfectly sorted, most recent first, without the ugly index column
-            st.dataframe(df_table.sort_values(["Date", "Time (Local)"], ascending=[False, False]), hide_index=True, use_container_width=True)
+        # Display perfectly sorted, most recent first, without the ugly index column
+        st.dataframe(df_table.sort_values(["Date", "Time (Local)"], ascending=[False, False]), hide_index=True, use_container_width=True)
     else:
         st.info("Database is entirely blank. No historical logs exist.")
 
