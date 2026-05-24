@@ -158,7 +158,7 @@ if device_id:
             last_seen = pd.to_datetime(latest["timestamp"])
             current_time = datetime.utcnow() + timedelta(hours=5)
             seconds_ago = abs((current_time - last_seen).total_seconds())
-            is_online = seconds_ago < 15
+            is_online = seconds_ago < 10
         except:
             is_online = False
     else:
@@ -174,23 +174,18 @@ if is_online:
     st.success("🟢 **SYSTEM ONLINE** — Live Data Streaming Active")
 else:
     if latest:
-        # 🟢 FIX: Safely read last_update without triggering the 1970 Epoch bug
-        last_update = st.session_state.get("last_update_time", time.time())
-        seconds_offline = 0 if last_update == 0 else (time.time() - last_update)
-        
-        # Calculate the absolute time difference from the data's timestamp
+        # 🟢 FIX: Flawless Offline Timer
+        # Calculate the absolute time difference directly from the newest packet's timestamp.
+        # This completely eliminates the 1-minute delay and syncs perfectly with reality!
         last_seen = pd.to_datetime(latest["timestamp"])
         current_time = datetime.utcnow() + timedelta(hours=5)
-        timestamp_offline = (current_time - last_seen).total_seconds()
-        
-        # Blended Timer Logic
-        final_offline_seconds = max(seconds_offline, timestamp_offline - 60)
+        final_offline_seconds = (current_time - last_seen).total_seconds()
         
         # Prevent negative seconds if clock drift is weird
         if final_offline_seconds < 0: final_offline_seconds = 0
             
         offline_text = format_offline_duration(final_offline_seconds)
-        st.error(f"🔴 **SYSTEM OFFLINE** — Engine off for {offline_text}")
+        st.error(f"🔴 **SYSTEM OFFLINE** — Connection lost for {offline_text}")
     else:
         st.error("🔴 **SYSTEM OFFLINE** — No vehicle connected.")
 
