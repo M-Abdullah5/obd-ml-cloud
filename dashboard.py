@@ -137,16 +137,17 @@ with st.sidebar:
 # ---------------------------------------------------------
 st.title("🚗 ARVIS Dashboard")
 
-if selected_device:
-    latest_raw = get_live_data(selected_device)
+if device_id:
+    latest_raw = get_live_data(device_id)
     
     # 🟢 FIX: INCREMENTAL CACHING ENGINE
     # Download the heavy 3-hour log ONLY ONCE. Then, just download the tiny 1.5-minute chunk
     # and glue it to the existing dataframe in memory!
-    recent_df = get_recent_history_data(selected_device)
+    # MUST use .copy() to prevent Streamlit from throwing CachedObjectMutationWarning!
+    recent_df = get_recent_history_data(device_id).copy()
     
     if "full_history_df" not in st.session_state:
-        st.session_state.full_history_df = get_full_history_data(selected_device)
+        st.session_state.full_history_df = get_full_history_data(device_id).copy()
         
     if not recent_df.empty:
         # Append the new records and drop duplicates instantly
