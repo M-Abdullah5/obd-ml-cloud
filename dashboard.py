@@ -318,7 +318,7 @@ with tab3:
 # Refreshing too fast blocks the browser and creates lag/stuttering. 
 # Unity only uploads every 2 seconds anyway!
 if is_online:
-    time.sleep(2) # Sync perfectly with Unity's 2-second rate
+    time.sleep(1.5) # Nyquist offset: slightly out of sync with Unity's 1.8s to avoid harmonic delay
     st.rerun()
 else:
     time.sleep(5) # Slow down when offline to completely unblock the server
