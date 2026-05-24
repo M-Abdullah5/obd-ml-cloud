@@ -151,35 +151,16 @@ if device_id:
         # Use the highest valid data
         latest = st.session_state.highest_latest
         
-        # 🟢 FIX: Removed the 'absolute_seconds_ago' check. 
-        # Comparing the Phone's clock to the Server's clock causes false "Offline" statuses 
-        # if the phone's clock is drifted by even 20 seconds.
-        # We now purely rely on whether new data is actively arriving.
-        current_data_str = str(latest)
-        
-        if "last_data_str" not in st.session_state:
-            st.session_state.last_data_str = current_data_str
-            
-            # 🟢 FIX: Prevent "False Online" on startup!
-            # If the database timestamp is clearly > 60s old (ignoring clock drift),
-            # force the session into an Offline state instantly.
+        # 🟢 FIX: Flawless Online Status Check
+        # Instead of relying on session state (which resets on refresh) or local browser time,
+        # we strictly compare the newest packet's timestamp to the true UTC+5 time!
+        try:
             last_seen = pd.to_datetime(latest["timestamp"])
             current_time = datetime.utcnow() + timedelta(hours=5)
-            if abs((current_time - last_seen).total_seconds()) > 60:
-                st.session_state.last_update_time = 0
-            else:
-                st.session_state.last_update_time = time.time()
-                
-        elif st.session_state.last_data_str != current_data_str:
-            st.session_state.last_data_str = current_data_str
-            st.session_state.last_update_time = time.time()
-            
-        last_update = st.session_state.get("last_update_time", time.time())
-        if last_update == 0:
+            seconds_ago = abs((current_time - last_seen).total_seconds())
+            is_online = seconds_ago < 15
+        except:
             is_online = False
-        else:
-            seconds_ago = time.time() - last_update
-            is_online = seconds_ago < 10
     else:
         is_online = False
         latest = None
