@@ -191,13 +191,15 @@ if device_id:
             
     df = st.session_state.get("full_history_df", pd.DataFrame())
     
-    # Ensure ALL columns exist to prevent crashes
+    # Ensure ALL columns exist to prevent crashes (especially for older historical data)
     expected_cols = ["RPM", "Speed", "CoolantTemp", "EngineLoad", "Voltage", 
                      "IntakeTemp", "MAF", "ThrottlePos", "OilTemp", "MAP", 
-                     "FuelLevel", "STFT", "LTFT", "O2Voltage"]
+                     "FuelLevel", "STFT", "LTFT", "O2Voltage", 
+                     "ml_status", "ml_alert"]
     if not df.empty:
         for col in expected_cols:
-            if col not in df.columns: df[col] = 0.0
+            if col not in df.columns: 
+                df[col] = "Healthy" if col == "ml_status" else "None" if col == "ml_alert" else 0.0
             
     if not latest_raw:
         is_online = False
