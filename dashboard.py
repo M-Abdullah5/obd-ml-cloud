@@ -3,7 +3,17 @@ import pandas as pd
 import streamlit as st
 import plotly.express as px
 import requests
+import joblib
 from datetime import datetime, timedelta
+
+@st.cache_resource
+def load_ml_model():
+    try:
+        return joblib.load("alto_rf_model.pkl")
+    except:
+        return None
+
+rf_model = load_ml_model()
 
 # ---------------------------------------------------------
 # 1. PAGE CONFIG & THEME SETUP
@@ -250,7 +260,7 @@ st.divider()
 # ---------------------------------------------------------
 # 6. TABBED INTERFACE
 # ---------------------------------------------------------
-tab1, tab2, tab3 = st.tabs(["📊 Live Metrics", "📈 Graphs", "📝 Raw Historical Data"])
+tab1, tab2, tab3, tab4 = st.tabs(["📊 Live Metrics", "📈 Graphs", "📝 Raw Historical Data", "🚨 Alerts"])
 
 # ================= TAB 1: LIVE METRICS =================
 with tab1:
@@ -352,6 +362,70 @@ with tab3:
         st.dataframe(df_table.sort_values(["Date", "Time (Local)"], ascending=[False, False]), hide_index=True, use_container_width=True)
     else:
         st.info("Database is entirely blank. No historical logs exist.")
+
+# ================= TAB 4: ALERTS =================
+with tab4:
+    st.subheader("Historical ML Alerts (Last 7 Days)")
+    st.markdown("Automated AI Diagnostic engine scanning telemetry history to isolate confirmed component failures.")
+    
+    if not df.empty and rf_model is not None:
+        try:
+            # Run the ML model over the entire historical dataframe instantly!
+            features = ["RPM", "Speed", "CoolantTemp", "EngineLoad", "IntakeTemp", "MAF", "ThrottlePos", "Voltage", "OilTemp", "MAP", "FuelLevel", "STFT", "LTFT", "O2Voltage"]
+            df_alerts = df.copy()
+            df_alerts['ML_Prediction'] = rf_model.predict(df_alerts[features])
+            
+            # Filter out healthy states
+            df_faults = df_alerts[~df_alerts['ML_Prediction'].str.contains("Healthy", na=False)].copy()
+            
+            if df_faults.empty:
+                st.success("✅ **No confirmed alerts in the recent history.** Your engine is running perfectly!")
+            else:
+                # CONFIRMATION ENGINE: Find contiguous blocks of errors
+                # If an error happens 3 times in a row, it's confirmed!
+                df_faults['Block'] = (df_faults['ML_Prediction'] != df_faults['ML_Prediction'].shift(1)).cumsum()
+                
+                # Group by these contiguous blocks
+                confirmed_alerts = []
+                for block_id, group in df_faults.groupby('Block'):
+                    if len(group) >= 3: # MUST PERSIST for at least 3 packets (4.5 to 6 seconds) to avoid false edge alarms
+                        start_time = group['timestamp'].iloc[0]
+                        end_time = group['timestamp'].iloc[-1]
+                        alert_type = group['ML_Prediction'].iloc[0].replace("_", " ")
+                        
+                        confirmed_alerts.append({
+                            "Start": start_time,
+                            "End": end_time,
+                            "Alert": alert_type,
+                            "Duration": len(group) * 1.5 # Approximate duration in seconds
+                        })
+                
+                # Reverse list to show newest first
+                confirmed_alerts.reverse()
+                
+                if len(confirmed_alerts) == 0:
+                    st.success("✅ **No confirmed alerts.** (Some minor sensor edges were detected but discarded as noise).")
+                else:
+                    for alert in confirmed_alerts:
+                        # Draw beautiful UI Banners for each confirmed alert
+                        bg_color = "#4a0f0f" if alert["Alert"] in ["Misfire", "Overheat"] else "#4a3c0f"
+                        icon = "🔥" if alert["Alert"] == "Overheating" else "⚡" if alert["Alert"] == "Bad Alternator" else "🚨"
+                        
+                        st.markdown(f"""
+                        <div style="background-color: {bg_color}; padding: 15px; border-radius: 10px; margin-bottom: 10px; border-left: 5px solid #ff4b4b;">
+                            <h4 style="margin: 0; color: white;">{icon} CONFIRMED: {alert['Alert']}</h4>
+                            <p style="margin: 5px 0 0 0; color: #d1d1d1; font-size: 14px;">
+                                <b>Component Affected:</b> Engine / Diagnostics<br>
+                                <b>Time:</b> {alert['Start']} to {alert['End']}<br>
+                                <b>Sustained Duration:</b> ~{alert['Duration']:.1f} seconds
+                            </p>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+        except Exception as e:
+            st.error(f"Error processing alerts: {str(e)}")
+    else:
+        st.info("Waiting for data to run diagnostics...")
 
 # ---------------------------------------------------------
 # 7. AUTO-REFRESH LOGIC
