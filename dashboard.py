@@ -140,25 +140,50 @@ st.title("🚗 ARVIS Dashboard")
 if device_id:
     latest_raw = get_live_data(device_id)
     
-    # 🟢 FIX: INCREMENTAL CACHING ENGINE
-    # Download the heavy 3-hour log ONLY ONCE. Then, just download the tiny 1.5-minute chunk
-    # and glue it to the existing dataframe in memory!
-    # MUST use .copy() to prevent Streamlit from throwing CachedObjectMutationWarning!
-    recent_df = get_recent_history_data(device_id).copy()
-    
-    if "full_history_df" not in st.session_state:
-        st.session_state.full_history_df = get_full_history_data(device_id).copy()
+    if latest_raw:
+        latest = latest_raw
         
-    if not recent_df.empty:
-        # Append the new records and drop duplicates instantly
-        combined = pd.concat([st.session_state.full_history_df, recent_df])
-        combined = combined.drop_duplicates(subset=['timestamp']).sort_values('timestamp')
+        # 🟢 FIX: Flawless Offline Check with Fallback
+        try:
+            if "server_timestamp_utc" in latest:
+                server_arr_time = pd.to_datetime(latest["server_timestamp_utc"]).tz_localize(None)
+                seconds_ago = (datetime.utcnow() - server_arr_time).total_seconds()
+            else:
+                # Fallback if server.py isn't updated: track local arrival time
+                current_packet_time = latest.get("timestamp", "")
+                if "fallback_last_packet" not in st.session_state or current_packet_time != st.session_state.get("fallback_last_packet"):
+                    st.session_state["fallback_last_packet"] = current_packet_time
+                    st.session_state["fallback_arrival_time"] = time.time()
+                seconds_ago = time.time() - st.session_state.get("fallback_arrival_time", time.time())
+                
+            is_online = seconds_ago <= 15
+            is_live_data_fresh = seconds_ago <= 4
+        except:
+            is_online = False
+            is_live_data_fresh = False
+            seconds_ago = 9999
+            
+    # 🟢 CRITICAL PERFORMANCE OPTIMIZATION
+    # Do NOT download and concatenate the heavy history DataFrame every 1.5 seconds!
+    # We only update history every 10 seconds to drastically reduce RAM and CPU load.
+    if "last_history_update" not in st.session_state:
+        st.session_state.last_history_update = 0
         
-        # Trim to keep only the last 3 hours to prevent RAM from exploding over days
-        three_hours_ago = combined['timestamp'].max() - timedelta(hours=3)
-        st.session_state.full_history_df = combined[combined['timestamp'] >= three_hours_ago]
+    if time.time() - st.session_state.last_history_update > 10.0:
+        st.session_state.last_history_update = time.time()
         
-    df = st.session_state.full_history_df
+        recent_df = get_recent_history_data(device_id).copy()
+        if "full_history_df" not in st.session_state:
+            st.session_state.full_history_df = get_full_history_data(device_id).copy()
+            
+        if not recent_df.empty:
+            combined = pd.concat([st.session_state.full_history_df, recent_df])
+            combined = combined.drop_duplicates(subset=['timestamp']).sort_values('timestamp')
+            # Keep only last 2 hours to keep it even lighter
+            two_hours_ago = combined['timestamp'].max() - timedelta(hours=2)
+            st.session_state.full_history_df = combined[combined['timestamp'] >= two_hours_ago]
+            
+    df = st.session_state.get("full_history_df", pd.DataFrame())
     
     # Ensure ALL columns exist to prevent crashes
     expected_cols = ["RPM", "Speed", "CoolantTemp", "EngineLoad", "Voltage", 
@@ -167,53 +192,8 @@ if device_id:
     if not df.empty:
         for col in expected_cols:
             if col not in df.columns: df[col] = 0.0
-    
-    if latest_raw:
-        # 🟢 FIX: Prevent "Dashboard Fighting Itself" during bulk offline uploads
-        # Asynchronous threads can upload older packets out-of-order. 
-        # We must ignore any packet that is OLDER than the newest one we've seen!
-        incoming_time = pd.to_datetime(latest_raw["timestamp"])
-        
-        if "highest_timestamp" not in st.session_state:
-            st.session_state.highest_timestamp = incoming_time
-            st.session_state.highest_latest = latest_raw
-        elif incoming_time > st.session_state.highest_timestamp:
-            st.session_state.highest_timestamp = incoming_time
-            st.session_state.highest_latest = latest_raw
             
-        # Use the highest valid data
-        latest = st.session_state.highest_latest
-        
-        # 🟢 FIX: Flawless Online Status Check
-        # Instead of relying on session state (which resets on refresh) or local browser time,
-        # we strictly compare the newest packet's timestamp to the true UTC+5 time!
-        try:
-            # 🟢 NEW: Flawless Offline Timer using Session State!
-            # Instead of relying on the phone's clock being perfectly synced with the server,
-            # we just track exactly when the dashboard SAW a new packet arrive.
-            current_packet_time = latest["timestamp"]
-            
-            if "last_seen_packet" not in st.session_state:
-                st.session_state["last_seen_packet"] = current_packet_time
-                st.session_state["last_arrival_time"] = time.time()
-                
-            if current_packet_time != st.session_state["last_seen_packet"]:
-                # The data changed! The connection is 100% active.
-                st.session_state["last_seen_packet"] = current_packet_time
-                st.session_state["last_arrival_time"] = time.time()
-                
-            seconds_ago = time.time() - st.session_state["last_arrival_time"]
-            
-            # System Online (Green Banner) status stays active for 10 seconds to prevent flickering
-            is_online = seconds_ago <= 10
-            
-            # Live Metrics numbers are ONLY shown if data is 4 seconds fresh or less!
-            is_live_data_fresh = seconds_ago <= 4
-        except:
-            is_online = False
-            is_live_data_fresh = False
-            seconds_ago = 9999
-    else:
+    if not latest_raw:
         is_online = False
         is_live_data_fresh = False
         latest = None
@@ -363,30 +343,38 @@ with tab4:
     if not df.empty and "ml_prediction" in df.columns:
         try:
             df_alerts = df.copy()
+            # 🟢 FIX: Calculate Block IDs *BEFORE* filtering!
+            # This ensures that if Misfire happens, then Healthy, then Misfire again,
+            # they are treated as completely separate alerts, rather than merged together!
+            df_alerts['Block'] = (df_alerts['ml_prediction'] != df_alerts['ml_prediction'].shift(1)).cumsum()
             
-            # Filter out healthy states
+            # Now filter out healthy states
             df_faults = df_alerts[~df_alerts['ml_prediction'].str.contains("Healthy", na=False)].copy()
             
             if df_faults.empty:
                 st.success("✅ **No confirmed alerts in the recent history.** Your engine is running perfectly!")
             else:
-                # CONFIRMATION ENGINE: Find contiguous blocks of errors
-                # If an error happens 3 times in a row, it's confirmed!
-                df_faults['Block'] = (df_faults['ml_prediction'] != df_faults['ml_prediction'].shift(1)).cumsum()
-                
                 # Group by these contiguous blocks
                 confirmed_alerts = []
                 for block_id, group in df_faults.groupby('Block'):
-                    if len(group) >= 3: # MUST PERSIST for at least 3 packets (4.5 to 6 seconds) to avoid false edge alarms
+                    if len(group) >= 3: # MUST PERSIST for at least 3 packets to avoid false edge alarms
                         start_time = group['timestamp'].iloc[0]
                         end_time = group['timestamp'].iloc[-1]
                         alert_type = group['ml_prediction'].iloc[0].replace("_", " ")
+                        
+                        # 🟢 FIX: Exact Timestamp Math
+                        t_start = pd.to_datetime(start_time)
+                        t_end = pd.to_datetime(end_time)
+                        exact_seconds = (t_end - t_start).total_seconds()
+                        
+                        # Avoid 0 seconds if the packet gap is extremely small
+                        if exact_seconds < 1: exact_seconds = len(group) * 1.5
                         
                         confirmed_alerts.append({
                             "Start": start_time,
                             "End": end_time,
                             "Alert": alert_type,
-                            "Duration": len(group) * 1.5 # Approximate duration in seconds
+                            "DurationSeconds": exact_seconds
                         })
                 
                 # Reverse list to show newest first
@@ -400,13 +388,16 @@ with tab4:
                         bg_color = "#4a0f0f" if alert["Alert"] in ["Misfire", "Overheat"] else "#4a3c0f"
                         icon = "🔥" if alert["Alert"] == "Overheating" else "⚡" if alert["Alert"] == "Bad Alternator" else "🚨"
                         
+                        # 🟢 FIX: Format into Hours, Minutes, Seconds
+                        duration_text = format_offline_duration(alert['DurationSeconds'])
+                        
                         st.markdown(f"""
                         <div style="background-color: {bg_color}; padding: 15px; border-radius: 10px; margin-bottom: 10px; border-left: 5px solid #ff4b4b;">
                             <h4 style="margin: 0; color: white;">{icon} CONFIRMED: {alert['Alert']}</h4>
                             <p style="margin: 5px 0 0 0; color: #d1d1d1; font-size: 14px;">
                                 <b>Component Affected:</b> Engine / Diagnostics<br>
                                 <b>Time:</b> {alert['Start']} to {alert['End']}<br>
-                                <b>Sustained Duration:</b> ~{alert['Duration']:.1f} seconds
+                                <b>Sustained Duration:</b> {duration_text}
                             </p>
                         </div>
                         """, unsafe_allow_html=True)
