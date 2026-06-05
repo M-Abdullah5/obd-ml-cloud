@@ -188,12 +188,21 @@ if device_id:
         # Instead of relying on session state (which resets on refresh) or local browser time,
         # we strictly compare the newest packet's timestamp to the true UTC+5 time!
         try:
-            last_seen = pd.to_datetime(latest["timestamp"])
+            # 🟢 NEW: Flawless Offline Timer using Session State!
+            # Instead of relying on the phone's clock being perfectly synced with the server,
+            # we just track exactly when the dashboard SAW a new packet arrive.
+            current_packet_time = latest["timestamp"]
             
-            # 🟢 RESTORED: Local Time Processing
-            # Compare the phone's native local time to the dashboard's UTC+5 time.
-            current_time = datetime.utcnow() + timedelta(hours=5)
-            seconds_ago = abs((current_time - last_seen).total_seconds())
+            if "last_seen_packet" not in st.session_state:
+                st.session_state["last_seen_packet"] = current_packet_time
+                st.session_state["last_arrival_time"] = time.time()
+                
+            if current_packet_time != st.session_state["last_seen_packet"]:
+                # The data changed! The connection is 100% active.
+                st.session_state["last_seen_packet"] = current_packet_time
+                st.session_state["last_arrival_time"] = time.time()
+                
+            seconds_ago = time.time() - st.session_state["last_arrival_time"]
             
             # System Online (Green Banner) status stays active for 10 seconds to prevent flickering
             is_online = seconds_ago <= 10
@@ -203,32 +212,25 @@ if device_id:
         except:
             is_online = False
             is_live_data_fresh = False
+            seconds_ago = 9999
     else:
         is_online = False
         is_live_data_fresh = False
         latest = None
+        seconds_ago = 9999
 else:
     is_online = False
     is_live_data_fresh = False
     latest = None
     df = pd.DataFrame()
+    seconds_ago = 9999
 
 # Status Banner
 if is_online:
     st.success("🟢 **SYSTEM ONLINE** — Live Data Streaming Active")
 else:
     if latest:
-        # 🟢 FIX: Flawless Offline Timer
-        # Calculate the absolute time difference directly from the newest packet's timestamp.
-        # This completely eliminates the 1-minute delay and syncs perfectly with reality!
-        last_seen = pd.to_datetime(latest["timestamp"])
-        current_time = datetime.utcnow() + timedelta(hours=5)
-        final_offline_seconds = (current_time - last_seen).total_seconds()
-        
-        # Prevent negative seconds if clock drift is weird
-        if final_offline_seconds < 0: final_offline_seconds = 0
-            
-        offline_text = format_offline_duration(final_offline_seconds)
+        offline_text = format_offline_duration(seconds_ago)
         st.error(f"🔴 **SYSTEM OFFLINE** — Connection lost for {offline_text}")
     else:
         st.error("🔴 **SYSTEM OFFLINE** — No vehicle connected.")
