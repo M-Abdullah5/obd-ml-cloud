@@ -1,6 +1,6 @@
 import os
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List
 from fastapi import FastAPI, BackgroundTasks, Request
 from pydantic import BaseModel
@@ -127,13 +127,15 @@ def process_bulk_upload(data_list: List[VehicleData]):
     try:
         latest = data_list[-1]
         
-        # 🟢 FIX: CLOSED LOOP CHECKER
-        # Do NOT update the Live node with offline cache data! 
-        # Explicitly check if the packet is less than 15 seconds old.
+        # 🟢 FIX: CLOSED LOOP CHECKER with Correct Timezone Alignment!
+        # Unity sends data in UTC+5 (Pakistan Standard Time).
+        # We MUST compare it against the server's UTC+5 time, NOT plain UTC.
         is_live = False
         try:
             dt = datetime.strptime(latest.timestamp, "%Y-%m-%d %H:%M:%S")
-            if abs((datetime.now() - dt).total_seconds()) < 15:
+            server_local_time = datetime.utcnow() + timedelta(hours=5)
+            # Increased threshold to 60 seconds to absorb phone clock drift
+            if abs((server_local_time - dt).total_seconds()) < 60:
                 is_live = True
         except:
             is_live = True
