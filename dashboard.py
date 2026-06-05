@@ -79,7 +79,7 @@ def get_live_data(device_id):
     except: pass
     return None
 
-@st.cache_data(ttl=15)
+@st.cache_data(ttl=1)
 def get_recent_history_data(device_id):
     try:
         # Fetch only the last 50 records (approx 1.5 minutes) for the incremental cache update!
@@ -140,6 +140,12 @@ st.title("🚗 ARVIS Dashboard")
 if device_id:
     latest_raw = get_live_data(device_id)
     
+    if latest_raw:
+        st.session_state.cached_latest = latest_raw
+    else:
+        # Fallback to the last known good packet if Firebase hiccups
+        latest_raw = st.session_state.get("cached_latest", None)
+        
     if latest_raw:
         latest = latest_raw
         
@@ -216,8 +222,10 @@ else:
         st.error("🔴 **SYSTEM OFFLINE** — No vehicle connected.")
 
 # ---------------------------------------------------------
-# 5. ML ALERTS
+# 5. ML ALERTS & CACHED ALERT HISTORY
 # ---------------------------------------------------------
+st.markdown("### ⚠️ Machine Learning Diagnostics")
+
 if latest and is_online:
     ml_status = latest.get("ml_status", "Healthy")
     ml_alert = latest.get("ml_alert", "None")
@@ -226,6 +234,23 @@ if latest and is_online:
         st.error(f"🚨 **CRITICAL ML ALERT:** {ml_alert}")
     elif ml_status == "Warning":
         st.warning(f"⚠️ **ML WARNING:** {ml_alert}")
+    else:
+        st.success("✅ **System Healthy** — No active faults detected")
+
+# Extract and cache historical alerts from the dataframe
+if not df.empty:
+    alerts_df = df[df['ml_status'] != 'Healthy']
+    if not alerts_df.empty:
+        st.markdown("#### 📜 Historical Alert Log")
+        # Keep only the first occurrence of each alert burst to prevent spam
+        alerts_df['alert_burst'] = (alerts_df['ml_alert'] != alerts_df['ml_alert'].shift()).cumsum()
+        unique_alerts = alerts_df.groupby('alert_burst').first()
+        
+        display_alerts = unique_alerts[['timestamp', 'ml_status', 'ml_alert']].sort_values('timestamp', ascending=False)
+        display_alerts.columns = ['Timestamp', 'Severity', 'Diagnostic Code']
+        st.dataframe(display_alerts, use_container_width=True, hide_index=True)
+    else:
+        st.info("No historical alerts logged in the current session.")
 
 st.divider()
 
