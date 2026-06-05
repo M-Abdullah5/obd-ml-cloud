@@ -32,7 +32,7 @@ class VehicleData(BaseModel):
     STFT: float = 0
     LTFT: float = 0
     O2Voltage: float = 0
-    ml_prediction: str = "Healthy_City"
+    ml_prediction: str = "Healthy"
 
 def process_and_upload(data: VehicleData):
     """
