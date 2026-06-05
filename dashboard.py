@@ -3,17 +3,7 @@ import pandas as pd
 import streamlit as st
 import plotly.express as px
 import requests
-import joblib
 from datetime import datetime, timedelta
-
-@st.cache_resource
-def load_ml_model():
-    try:
-        return joblib.load("alto_rf_model.pkl")
-    except:
-        return None
-
-rf_model = load_ml_model()
 
 # ---------------------------------------------------------
 # 1. PAGE CONFIG & THEME SETUP
@@ -368,22 +358,19 @@ with tab4:
     st.subheader("Historical ML Alerts (Last 7 Days)")
     st.markdown("Automated AI Diagnostic engine scanning telemetry history to isolate confirmed component failures.")
     
-    if not df.empty and rf_model is not None:
+    if not df.empty and "ml_prediction" in df.columns:
         try:
-            # Run the ML model over the entire historical dataframe instantly!
-            features = ["RPM", "Speed", "CoolantTemp", "EngineLoad", "IntakeTemp", "MAF", "ThrottlePos", "Voltage", "OilTemp", "MAP", "FuelLevel", "STFT", "LTFT", "O2Voltage"]
             df_alerts = df.copy()
-            df_alerts['ML_Prediction'] = rf_model.predict(df_alerts[features])
             
             # Filter out healthy states
-            df_faults = df_alerts[~df_alerts['ML_Prediction'].str.contains("Healthy", na=False)].copy()
+            df_faults = df_alerts[~df_alerts['ml_prediction'].str.contains("Healthy", na=False)].copy()
             
             if df_faults.empty:
                 st.success("✅ **No confirmed alerts in the recent history.** Your engine is running perfectly!")
             else:
                 # CONFIRMATION ENGINE: Find contiguous blocks of errors
                 # If an error happens 3 times in a row, it's confirmed!
-                df_faults['Block'] = (df_faults['ML_Prediction'] != df_faults['ML_Prediction'].shift(1)).cumsum()
+                df_faults['Block'] = (df_faults['ml_prediction'] != df_faults['ml_prediction'].shift(1)).cumsum()
                 
                 # Group by these contiguous blocks
                 confirmed_alerts = []
@@ -391,7 +378,7 @@ with tab4:
                     if len(group) >= 3: # MUST PERSIST for at least 3 packets (4.5 to 6 seconds) to avoid false edge alarms
                         start_time = group['timestamp'].iloc[0]
                         end_time = group['timestamp'].iloc[-1]
-                        alert_type = group['ML_Prediction'].iloc[0].replace("_", " ")
+                        alert_type = group['ml_prediction'].iloc[0].replace("_", " ")
                         
                         confirmed_alerts.append({
                             "Start": start_time,

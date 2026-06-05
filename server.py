@@ -32,6 +32,7 @@ class VehicleData(BaseModel):
     STFT: float = 0
     LTFT: float = 0
     O2Voltage: float = 0
+    ml_prediction: str = "Healthy_City"
 
 def process_and_upload(data: VehicleData):
     """
@@ -140,8 +141,15 @@ def process_bulk_upload(data_list: List[VehicleData]):
         if is_live:
             # 1. Update Live (Only the most recent packet)
             live_payload = latest.dict()
-            live_payload["ml_status"] = "Healthy"
-            live_payload["ml_alert"] = "None"
+            prediction = latest.ml_prediction
+            
+            if "Healthy" in prediction:
+                live_payload["ml_status"] = "Healthy"
+                live_payload["ml_alert"] = "None"
+            else:
+                live_payload["ml_status"] = "Warning" if prediction in ["Clogged_Filter", "Bad_Alternator"] else "Critical"
+                live_payload["ml_alert"] = f"ML DETECTION: {prediction.replace('_', ' ')}"
+                
             # raise_for_status() ensures we fail loudly if Firebase rejects it!
             session.put(f"{FIREBASE_DB_URL}live/{latest.device_id}.json", json=live_payload, timeout=5).raise_for_status()
         
