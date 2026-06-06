@@ -71,15 +71,14 @@ def get_devices():
     except: pass
     return []
 
-@st.cache_data(ttl=1)
 def get_live_data(device_id):
     try:
+        # Fetching a single tiny JSON object directly without cache ensures 100% real-time accuracy
         res = requests.get(f"{FIREBASE_DB_URL}live/{device_id}.json")
         if res.status_code == 200: return res.json()
     except: pass
     return None
 
-@st.cache_data(ttl=1)
 def get_recent_history_data(device_id):
     try:
         # Fetch only the last 50 records (approx 1.5 minutes) for the incremental cache update!
@@ -149,25 +148,22 @@ if device_id:
     if latest_raw:
         latest = latest_raw
         
-        # 🟢 RESTORED: The original, proven live tracking logic.
+        # 🟢 THE MOST BULLETPROOF LIVE TRACKING LOGIC
+        # We completely ignore the server time and purely watch the exact packet timestamp changing!
         try:
-            if "server_timestamp_utc" in latest:
-                server_arr_time = pd.to_datetime(latest["server_timestamp_utc"]).tz_localize(None)
-                seconds_ago = (datetime.utcnow() - server_arr_time).total_seconds()
-            else:
-                current_packet_time = latest.get("timestamp", "")
+            current_packet_time = latest.get("timestamp", "")
+            
+            if "last_seen_packet" not in st.session_state:
+                st.session_state["last_seen_packet"] = current_packet_time
+                st.session_state["last_arrival_time"] = time.time()
                 
-                if "last_seen_packet" not in st.session_state:
-                    st.session_state["last_seen_packet"] = current_packet_time
-                    st.session_state["last_arrival_time"] = time.time()
-                    
-                if current_packet_time != st.session_state["last_seen_packet"]:
-                    # The timestamp changed! The connection is definitively active!
-                    st.session_state["last_seen_packet"] = current_packet_time
-                    st.session_state["last_arrival_time"] = time.time()
-                    
-                seconds_ago = time.time() - st.session_state.get("last_arrival_time", time.time())
+            if current_packet_time != st.session_state["last_seen_packet"]:
+                # The data changed! The connection is definitively active!
+                st.session_state["last_seen_packet"] = current_packet_time
+                st.session_state["last_arrival_time"] = time.time()
                 
+            seconds_ago = time.time() - st.session_state.get("last_arrival_time", time.time())
+            
             is_online = seconds_ago <= 15
             is_live_data_fresh = seconds_ago <= 4
         except Exception as e:
