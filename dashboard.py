@@ -290,6 +290,67 @@ future_rul_status = latest.get("ml_future_status", "Healthy") if latest else "He
 future_alerts_count = 1 if future_rul_status == "Degrading" else 0
 future_badge = f"{future_alerts_count}" if future_alerts_count <= 9 else "9+"
 
+# 🟢 NEW: GLOBAL FLOATING ALERTS (TOP RIGHT)
+# Completely bypasses Streamlit's native UI restrictions. These float over ALL tabs
+# and will automatically vanish after 25 seconds, or if the user clicks the cross!
+has_floats = False
+floating_html = """
+<style>
+@keyframes slideInRight {
+    from { transform: translateX(120%); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
+}
+</style>
+<div style="position: fixed; top: 60px; right: 20px; z-index: 999999; display: flex; flex-direction: column; gap: 10px;">
+"""
+
+for alert in confirmed_alerts:
+    # Only show if it's currently happening, and it hasn't been 25 seconds yet
+    if alert['IsActive'] and alert['DurationSeconds'] <= 25.0:
+        has_floats = True
+        # Unique ID based on the exact time the fault started so it resets properly on new faults
+        safe_id = f"{alert['Alert'].replace(' ', '_')}_{str(alert['Start']).replace(' ', '_').replace(':', '')}"
+        
+        floating_html += f"""
+        <div id="float_{safe_id}" style="
+            background: linear-gradient(135deg, #ff4b4b 0%, #b30000 100%);
+            color: white;
+            padding: 15px;
+            border-radius: 10px;
+            box-shadow: 0px 8px 16px rgba(0,0,0,0.5);
+            border: 2px solid white;
+            width: 300px;
+            display: none;
+            animation: slideInRight 0.3s ease-out;
+        ">
+            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.4); padding-bottom: 8px; margin-bottom: 8px;">
+                <span style="font-weight: bold; font-size: 12px; letter-spacing: 1px;">⚠️ ENGINE FAULT DETECTED</span>
+                <span onclick="dismissHover_{safe_id}()" style="cursor: pointer; font-size: 14px; background: rgba(0,0,0,0.3); padding: 4px 8px; border-radius: 5px;">✖</span>
+            </div>
+            <div style="font-size: 16px; font-weight: bold; margin-bottom: 4px;">{alert['Alert']}</div>
+            <div style="font-size: 12px; opacity: 0.9;">Ongoing for {int(alert['DurationSeconds'])}s</div>
+        </div>
+        
+        <script>
+            function dismissHover_{safe_id}() {{
+                sessionStorage.setItem('dismiss_{safe_id}', 'true');
+                var el = document.getElementById('float_{safe_id}');
+                if(el) el.style.display = 'none';
+            }}
+            
+            // On every 1.5s rerun, immediately check if the user previously closed this specific alert
+            if (sessionStorage.getItem('dismiss_{safe_id}') !== 'true') {{
+                var el = document.getElementById('float_{safe_id}');
+                if(el) el.style.display = 'block';
+            }}
+        </script>
+        """
+
+floating_html += "</div>"
+
+if has_floats:
+    st.markdown(floating_html, unsafe_allow_html=True)
+
 # ---------------------------------------------------------
 # 6. TABBED INTERFACE
 # ---------------------------------------------------------
