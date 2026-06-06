@@ -148,91 +148,10 @@ with st.sidebar:
 # ---------------------------------------------------------
 st.title("🚗 ARVIS Dashboard")
 
-@st.cache_resource
-def get_shared_state():
-    # This dictionary persists in the Streamlit server memory FOREVER.
-    # It completely survives page reloads, fixing the "clock reset" bug!
-    return {
-        "last_seen_packet": "",
-        "last_arrival_time": time.time(),
-        "cached_latest": None
-    }
-
-shared_state = get_shared_state()
-
 if device_id:
-    latest_raw = get_live_data(device_id)
-    
-    if latest_raw:
-        shared_state["cached_latest"] = latest_raw
-    else:
-        latest_raw = shared_state["cached_latest"]
-        
-    if latest_raw:
-        latest = latest_raw
-        
-        # 🟢 INDESTRUCTIBLE LIVE TRACKING LOGIC
-        # 1. Survives page reloads via shared_state
-        # 2. Cross-references the History DataFrame in case the Live node gets stuck
-        try:
-            current_packet_time = latest.get("timestamp", "")
-            
-            # Cross-reference with History DF to mathematically guarantee we don't miss packets!
-            temp_df = st.session_state.get("full_history_df", pd.DataFrame())
-            if not temp_df.empty:
-                freshest_history_time = str(temp_df['timestamp'].max())
-                if freshest_history_time > current_packet_time:
-                    latest = temp_df.iloc[-1].to_dict()
-                    current_packet_time = str(latest.get("timestamp", ""))
-            
-            # 🟢 FIX: Absolute Time Calculation (Timezone & Clock Drift Proof)
-            # If the server injected a UTC timestamp, we use it because it is 100% immune to phone clock drift!
-            server_time_str = latest.get("server_timestamp_utc", "")
-            if server_time_str:
-                packet_utc = pd.to_datetime(server_time_str).replace(tzinfo=None)
-            else:
-                # Fallback to phone's time if missing
-                packet_utc = pd.to_datetime(current_packet_time) - timedelta(hours=5)
-                
-            absolute_seconds_ago = (datetime.now(timezone.utc).replace(tzinfo=None) - packet_utc).total_seconds()
-            
-            if current_packet_time != shared_state["last_seen_packet"]:
-                if shared_state["last_seen_packet"] == "":
-                    # First load! 
-                    shared_state["last_seen_packet"] = current_packet_time
-                    # If it's genuinely an old packet (e.g. > 2 minutes), show exact absolute offline time!
-                    if absolute_seconds_ago > 120:
-                        shared_state["last_arrival_time"] = time.time() - absolute_seconds_ago
-                    else:
-                        # 🟢 FIX: Initialize to 15 seconds ago (NOT 0) to avoid showing "57 years" (UNIX epoch)
-                        shared_state["last_arrival_time"] = time.time() - 15 
-                else:
-                    # The data actually changed! The connection is definitively active!
-                    shared_state["last_seen_packet"] = current_packet_time
-                    shared_state["last_arrival_time"] = time.time()
-                
-            # If the absolute difference is huge (>5 mins), trust it absolutely (ignores minor phone clock drift)
-            if absolute_seconds_ago > 300:
-                seconds_ago = absolute_seconds_ago
-            else:
-                seconds_ago = time.time() - shared_state["last_arrival_time"]
-            
-            # 🟢 FIX: Split tracking logic as requested
-            is_online = seconds_ago <= 15
-            is_display_fresh = seconds_ago <= 6.0      # Shows '--' after 6 seconds
-            is_actually_live = seconds_ago <= 3.5      # Considered "Live" only if < 3.5s
-        except Exception as e:
-            is_online = False
-            is_display_fresh = False
-            is_actually_live = False
-            seconds_ago = 9999
-            
-    # 🟢 FIX: UNRESTRICTED HISTORY POLLING FOR INSTANT SYNC
-    # The Live node can occasionally drop packets due to Unity batching, 
-    # forcing the dashboard to rely entirely on the History node.
-    # The previous 10-second throttle was creating a massive artificial 10-second delay 
-    # for all Online/Offline state changes and causing the 9s "DATA DELAYED" dropouts!
-    # We now fetch the tiny 50-row update every 1.5s for perfect real-time sync.
+    # 1. FETCH HISTORY FIRST to completely eliminate the "20 hours on reload" bug.
+    # By ensuring History is loaded before cross-referencing, the dashboard will instantly
+    # override the broken Live node on the very first render cycle.
     recent_df = get_recent_history_data(device_id).copy()
     if "full_history_df" not in st.session_state:
         st.session_state.full_history_df = get_full_history_data(device_id).copy()
@@ -240,13 +159,47 @@ if device_id:
     if not recent_df.empty:
         combined = pd.concat([st.session_state.full_history_df, recent_df])
         combined = combined.drop_duplicates(subset=['timestamp']).sort_values('timestamp')
-        # Keep only last 2 hours to keep it even lighter
         two_hours_ago = combined['timestamp'].max() - timedelta(hours=2)
         st.session_state.full_history_df = combined[combined['timestamp'] >= two_hours_ago]
             
     df = st.session_state.get("full_history_df", pd.DataFrame())
     
-    # Ensure ALL columns exist to prevent crashes (especially for older historical data)
+    # 2. FETCH LIVE
+    latest_raw = get_live_data(device_id)
+    latest = latest_raw if latest_raw else {}
+    
+    # 3. CROSS-REFERENCE AND CALCULATE STRICT OBD AGE
+    try:
+        current_packet_time = latest.get("timestamp", "")
+        
+        # Override with history if it's fresher (bypasses broken Live nodes instantly)
+        if not df.empty:
+            freshest_history_time = str(df['timestamp'].max())
+            if freshest_history_time > current_packet_time:
+                latest = df.iloc[-1].to_dict()
+                current_packet_time = str(latest.get("timestamp", ""))
+                
+        # 🟢 STRICT OBD PACKET AGE
+        # We no longer trust the server arrival time. We calculate exactly how old the
+        # data is based purely on when it was generated by the car.
+        packet_utc = pd.to_datetime(current_packet_time) - timedelta(hours=5)
+        absolute_seconds_ago = (datetime.now(timezone.utc).replace(tzinfo=None) - packet_utc).total_seconds()
+        
+        # Prevent negative seconds if phone clock is a fraction of a second fast
+        seconds_ago = max(0.0, absolute_seconds_ago)
+        
+        # 🟢 USER REQUIREMENT: "if data is 4 seconds old maximum, it should not be considered live"
+        is_online = seconds_ago <= 15
+        is_display_fresh = seconds_ago <= 6.0      
+        is_actually_live = seconds_ago <= 4.0      
+        
+    except Exception as e:
+        is_online = False
+        is_display_fresh = False
+        is_actually_live = False
+        seconds_ago = 9999
+        
+    # Ensure ALL columns exist to prevent crashes
     expected_cols = ["RPM", "Speed", "CoolantTemp", "EngineLoad", "Voltage", 
                      "IntakeTemp", "MAF", "ThrottlePos", "OilTemp", "MAP", 
                      "FuelLevel", "STFT", "LTFT", "O2Voltage", 
@@ -256,7 +209,7 @@ if device_id:
             if col not in df.columns: 
                 df[col] = "Healthy" if col == "ml_status" else "None" if col == "ml_alert" else 0.0
             
-    if not latest_raw:
+    if not latest:
         is_online = False
         is_display_fresh = False
         is_actually_live = False
