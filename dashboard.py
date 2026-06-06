@@ -175,10 +175,15 @@ if device_id:
                     latest = temp_df.iloc[-1].to_dict()
                     current_packet_time = str(latest.get("timestamp", ""))
             
-            # 🟢 FIX: Absolute Time Calculation for "Offline for a month" requirement
-            # Convert phone's Pakistan time to UTC to compare with Streamlit server
-            packet_time_utc5 = pd.to_datetime(current_packet_time)
-            packet_utc = packet_time_utc5 - timedelta(hours=5)
+            # 🟢 FIX: Absolute Time Calculation (Timezone & Clock Drift Proof)
+            # If the server injected a UTC timestamp, we use it because it is 100% immune to phone clock drift!
+            server_time_str = latest.get("server_timestamp_utc", "")
+            if server_time_str:
+                packet_utc = pd.to_datetime(server_time_str).replace(tzinfo=None)
+            else:
+                # Fallback to phone's time if missing
+                packet_utc = pd.to_datetime(current_packet_time) - timedelta(hours=5)
+                
             absolute_seconds_ago = (datetime.utcnow() - packet_utc).total_seconds()
             
             if current_packet_time != shared_state["last_seen_packet"]:

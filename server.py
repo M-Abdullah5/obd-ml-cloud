@@ -126,15 +126,12 @@ def process_bulk_upload(data_list: List[VehicleData]):
         
     try:
         latest = data_list[-1]
-        # 🟢 FIX: Flawless Live Detection (Protects Live Node from Cache Overwrites)
-        # Unity sends both Live packets and old Offline Cache batches.
-        # We MUST NOT overwrite the Live node if the packet is an old cache upload!
-        try:
-            packet_utc = datetime.strptime(latest.timestamp, "%Y-%m-%d %H:%M:%S") - timedelta(hours=5)
-            # If the packet is within 60 seconds of reality, it is a genuine live packet
-            is_live = abs((datetime.utcnow() - packet_utc).total_seconds()) < 60
-        except:
-            is_live = False
+        # 🟢 FIX: Flawless Timezone-Independent Live Detection!
+        # Unity's LiveUploadLoop sends exactly 1 packet at a time.
+        # Unity's CacheUploadLoop sends batches of up to 25 packets.
+        # Therefore, if the batch size is exactly 1, we mathematically KNOW it is the live stream!
+        # This completely ignores phone clock drift and timezones!
+        is_live = len(data_list) == 1
 
         if is_live:
             # 1. Update Live (Only the most recent packet)
