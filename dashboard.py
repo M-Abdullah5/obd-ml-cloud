@@ -73,9 +73,14 @@ def get_devices():
 
 def get_live_data(device_id):
     try:
-        # Fetching a single tiny JSON object directly without cache ensures 100% real-time accuracy
-        res = requests.get(f"{FIREBASE_DB_URL}live/{device_id}.json")
-        if res.status_code == 200: return res.json()
+        # 🟢 THE ULTIMATE FIX: Bypass the Live node entirely!
+        # If the History graphs are receiving data, we just mathematically grab the absolute 
+        # newest packet straight from the History node (limitToLast=1) to ensure 100% sync!
+        res = requests.get(f"{FIREBASE_DB_URL}history/{device_id}.json?orderBy=\"$key\"&limitToLast=1", timeout=2.0)
+        if res.status_code == 200: 
+            data = res.json()
+            if data:
+                return list(data.values())[-1]
     except: pass
     return None
 
