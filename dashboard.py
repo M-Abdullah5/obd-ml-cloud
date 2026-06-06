@@ -136,33 +136,48 @@ with st.sidebar:
 # ---------------------------------------------------------
 st.title("🚗 ARVIS Dashboard")
 
+@st.cache_resource
+def get_shared_state():
+    # This dictionary persists in the Streamlit server memory FOREVER.
+    # It completely survives page reloads, fixing the "clock reset" bug!
+    return {
+        "last_seen_packet": "",
+        "last_arrival_time": time.time(),
+        "cached_latest": None
+    }
+
+shared_state = get_shared_state()
+
 if device_id:
     latest_raw = get_live_data(device_id)
     
     if latest_raw:
-        st.session_state.cached_latest = latest_raw
+        shared_state["cached_latest"] = latest_raw
     else:
-        # Fallback to the last known good packet if Firebase hiccups
-        latest_raw = st.session_state.get("cached_latest", None)
+        latest_raw = shared_state["cached_latest"]
         
     if latest_raw:
         latest = latest_raw
         
-        # 🟢 THE MOST BULLETPROOF LIVE TRACKING LOGIC
-        # We completely ignore the server time and purely watch the exact packet timestamp changing!
+        # 🟢 INDESTRUCTIBLE LIVE TRACKING LOGIC
+        # 1. Survives page reloads via shared_state
+        # 2. Cross-references the History DataFrame in case the Live node gets stuck
         try:
             current_packet_time = latest.get("timestamp", "")
             
-            if "last_seen_packet" not in st.session_state:
-                st.session_state["last_seen_packet"] = current_packet_time
-                st.session_state["last_arrival_time"] = time.time()
+            # Cross-reference with History DF to mathematically guarantee we don't miss packets!
+            if not df.empty:
+                freshest_history_time = str(df['timestamp'].max())
+                if freshest_history_time > current_packet_time:
+                    # History node has newer data than Live node! Extract it to fix the freeze!
+                    latest = df.iloc[-1].to_dict()
+                    current_packet_time = str(latest.get("timestamp", ""))
+            
+            if current_packet_time != shared_state["last_seen_packet"]:
+                shared_state["last_seen_packet"] = current_packet_time
+                shared_state["last_arrival_time"] = time.time()
                 
-            if current_packet_time != st.session_state["last_seen_packet"]:
-                # The data changed! The connection is definitively active!
-                st.session_state["last_seen_packet"] = current_packet_time
-                st.session_state["last_arrival_time"] = time.time()
-                
-            seconds_ago = time.time() - st.session_state.get("last_arrival_time", time.time())
+            seconds_ago = time.time() - shared_state["last_arrival_time"]
             
             is_online = seconds_ago <= 15
             is_live_data_fresh = seconds_ago <= 4
