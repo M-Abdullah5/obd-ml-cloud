@@ -361,23 +361,22 @@ with tab1:
         
         c5, c6, c7, c8 = st.columns(4)
         c5.metric("Coolant Temp", f"{float(latest.get('CoolantTemp', 0))} °C")
-        c6.metric("Oil Temp", f"{float(latest.get('OilTemp', 0))} °C")
-        c7.metric("Intake Temp", f"{float(latest.get('IntakeTemp', 0))} °C")
-        c8.metric("Voltage", f"{float(latest.get('Voltage', 0))} V")
+        c6.metric("Intake Temp", f"{float(latest.get('IntakeTemp', 0))} °C")
+        c7.metric("Voltage", f"{float(latest.get('Voltage', 0))} V")
+        c8.metric("MAP Pressure", f"{float(latest.get('MAP', 0))} kPa")
         
-        c9, c10, c11, c12 = st.columns(4)
-        c9.metric("MAP Pressure", f"{float(latest.get('MAP', 0))} kPa")
-        c10.metric("MAF Airflow", f"{float(latest.get('MAF', 0))} g/s")
-        c11.metric("STFT / LTFT", f"{float(latest.get('STFT', 0))}% / {float(latest.get('LTFT', 0))}%")
-        c12.metric("O2 Sensor", f"{float(latest.get('O2Voltage', 0))} V")
+        c9, c10, c11 = st.columns(3)
+        c9.metric("STFT / LTFT", f"{float(latest.get('STFT', 0))}% / {float(latest.get('LTFT', 0))}%")
+        c10.metric("O2 Sensor", f"{float(latest.get('O2Voltage', 0))} V")
+        c11.empty()
     else:
         # Show stale indicators when the feed pauses > 4 seconds
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("RPM", "--"); c2.metric("Speed", "-- km/h"); c3.metric("Engine Load", "-- %"); c4.metric("Throttle", "-- %")
         c5, c6, c7, c8 = st.columns(4)
-        c5.metric("Coolant Temp", "-- °C"); c6.metric("Oil Temp", "-- °C"); c7.metric("Intake Temp", "-- °C"); c8.metric("Voltage", "-- V")
-        c9, c10, c11, c12 = st.columns(4)
-        c9.metric("MAP Pressure", "-- kPa"); c10.metric("MAF Airflow", "-- g/s"); c11.metric("STFT / LTFT", "--% / --%"); c12.metric("O2 Sensor", "-- V")
+        c5.metric("Coolant Temp", "-- °C"); c6.metric("Intake Temp", "-- °C"); c7.metric("Voltage", "-- V"); c8.metric("MAP Pressure", "-- kPa")
+        c9, c10, c11 = st.columns(3)
+        c9.metric("STFT / LTFT", "--% / --%"); c10.metric("O2 Sensor", "-- V"); c11.empty()
 
 # ================= TAB 2: GRAPHS (LAST 5 MINS) =================
 with tab2:
@@ -406,8 +405,6 @@ with tab2:
         with g2:
             st.markdown("###### Vehicle Speed (km/h)")
             st.line_chart(df_plot, x="timestamp", y="Speed", color="#00CC96", height=200, width='stretch')
-            st.markdown("###### Oil Temp (°C)")
-            st.line_chart(df_plot, x="timestamp", y="OilTemp", color="#F4D03F", height=200, width='stretch')
             st.markdown("###### Intake Temp (°C)")
             st.line_chart(df_plot, x="timestamp", y="IntakeTemp", color="#58D68D", height=200, width='stretch')
             st.markdown("###### Long Term Fuel Trim (%)")

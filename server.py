@@ -23,16 +23,16 @@ class VehicleData(BaseModel):
     CoolantTemp: int
     EngineLoad: float
     IntakeTemp: int = 0
-    MAF: float = 0
     ThrottlePos: float = 0
     Voltage: float = 0
-    OilTemp: int = 0
     MAP: int = 0
-    FuelLevel: float = 0
     STFT: float = 0
     LTFT: float = 0
     O2Voltage: float = 0
     ml_prediction: str = "Healthy"
+    ml_future_status: str = "Healthy"
+    ml_future_component: str = "None"
+    ml_future_hours: float = 0.0
 
 def process_and_upload(data: VehicleData):
     """
