@@ -119,7 +119,7 @@ def trim_history(device_id: str):
     except Exception as e:
         print("Trim error:", e)
 
-def process_bulk_upload(data_list: List[VehicleData], background_tasks: BackgroundTasks = None):
+def process_bulk_upload(data_list: List[VehicleData], background_tasks: BackgroundTasks = None, is_live: bool = False):
     """ Bulk uploads an entire queue to Firebase in a single blazing fast request """
     if not data_list:
         return
@@ -127,38 +127,30 @@ def process_bulk_upload(data_list: List[VehicleData], background_tasks: Backgrou
     try:
         latest = data_list[-1]
         
-        # 🟢 FIX: ALWAYS Update Live Node!
-        # Unity was sending cache batches (> 5) when lagging. Because of the previous `is_live` check, 
-        # the Live node was completely ignored, causing it to freeze on 19-hour old packets!
-        # This forced the dashboard to incorrectly report "19 hours offline" and wait 8-10 seconds 
-        # for the History node to refresh.
-        live_payload = latest.dict()
-        prediction = latest.ml_prediction
-        
-        if "Healthy" in prediction:
-            live_payload["ml_status"] = "Healthy"
-            live_payload["ml_alert"] = "None"
-        else:
-            live_payload["ml_status"] = "Warning" if prediction in ["Clogged_Filter", "Bad_Alternator"] else "Critical"
-            live_payload["ml_alert"] = f"ML DETECTION: {prediction.replace('_', ' ')}"
+        # 🟢 FIX: ONLY Update Live Node if explicitly told to by the Express Live Thread!
+        # If the background Cache Thread uploads a block of 19-hour old data, we completely skip this!
+        if is_live:
+            live_payload = latest.dict()
+            prediction = latest.ml_prediction
             
-        # 🟢 FIX: Only inject UTC Server Time if the packet is actually from this session.
-        # If Unity pushes a 19-hour old offline cache, we DO NOT want to inject current UTC,
-        # otherwise the dashboard thinks a 19-hour old packet just arrived "live"!
-        try:
-            dt = datetime.strptime(latest.timestamp, "%Y-%m-%d %H:%M:%S")
-            # Convert packet to UTC (Assuming UTC+5 based on system context)
-            packet_utc = dt - timedelta(hours=5)
-            age_seconds = (datetime.now(timezone.utc).replace(tzinfo=None) - packet_utc).total_seconds()
-        except:
-            age_seconds = 0
-            
-        # If packet is newer than 1 hour, it's from the current drive cycle. Inject perfect server time.
-        if -3600 < age_seconds < 3600:
-            live_payload["server_timestamp_utc"] = datetime.now(timezone.utc).isoformat()
-            
-        # raise_for_status() ensures we fail loudly if Firebase rejects it!
-        session.put(f"{FIREBASE_DB_URL}live/{latest.device_id}.json", json=live_payload, timeout=5).raise_for_status()
+            if "Healthy" in prediction:
+                live_payload["ml_status"] = "Healthy"
+                live_payload["ml_alert"] = "None"
+            else:
+                live_payload["ml_status"] = "Warning" if prediction in ["Clogged_Filter", "Bad_Alternator"] else "Critical"
+                live_payload["ml_alert"] = f"ML DETECTION: {prediction.replace('_', ' ')}"
+                
+            try:
+                dt = datetime.strptime(latest.timestamp, "%Y-%m-%d %H:%M:%S")
+                packet_utc = dt - timedelta(hours=5)
+                age_seconds = (datetime.now(timezone.utc).replace(tzinfo=None) - packet_utc).total_seconds()
+            except:
+                age_seconds = 0
+                
+            if -3600 < age_seconds < 3600:
+                live_payload["server_timestamp_utc"] = datetime.now(timezone.utc).isoformat()
+                
+            session.put(f"{FIREBASE_DB_URL}live/{latest.device_id}.json", json=live_payload, timeout=5).raise_for_status()
         
         # 2. Update History in Bulk (ALL packets at once using PATCH)
         history_updates = {}
@@ -195,13 +187,13 @@ def process_bulk_upload(data_list: List[VehicleData], background_tasks: Backgrou
         raise e
 
 @app.post("/api/upload")
-def upload_data(data: List[VehicleData], background_tasks: BackgroundTasks):
+def upload_data(data: List[VehicleData], background_tasks: BackgroundTasks, is_live: bool = False):
     """
     Unity sends data here as a JSON array (bulk upload).
     🟢 FIX: We wait for Firebase to successfully save the data BEFORE returning 200 OK.
     However, we offload the heavy 'trim_history' to a background task so Unity gets an instant response!
     """
-    process_bulk_upload(data, background_tasks)
+    process_bulk_upload(data, background_tasks, is_live)
     return {"status": "success", "message": f"Bulk processing {len(data)} items"}
 
 @app.get("/")
