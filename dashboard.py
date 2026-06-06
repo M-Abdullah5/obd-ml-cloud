@@ -92,25 +92,27 @@ def get_live_data(device_id):
     except: pass
     return None
 
-def get_recent_history_data(device_id, last_known_key=None):
+def get_recent_history_data(device_id, last_firebase_key=None):
     try:
-        # 🟢 FIX: THE GAPLESS SYNC ENGINE
-        # If we know the exact timestamp we last saw, ask Firebase for everything AFTER it.
-        # This guarantees 100% data ingestion (even if Unity dumps 3,600 packets from a 1-hour offline drive)
-        # without wasting bandwidth fetching data we already have!
-        if last_known_key:
-            url = f"{FIREBASE_DB_URL}history/{device_id}.json?orderBy=\"$key\"&startAt=\"{last_known_key}\""
+        # 🟢 STEP-BY-STEP GAPLESS FETCHING
+        # If we have a bookmark, ask Firebase for exactly everything after it!
+        # Because server.py now uses Append-Only Server Arrival keys, this perfectly
+        # retrieves massive offline cache dumps chunk-by-chunk without dropping anything.
+        if last_firebase_key:
+            url = f"{FIREBASE_DB_URL}history/{device_id}.json?orderBy=\"$key\"&startAt=\"{last_firebase_key}\"&limitToFirst=300"
         else:
-            url = f"{FIREBASE_DB_URL}history/{device_id}.json?orderBy=\"$key\"&limitToLast=30"
+            url = f"{FIREBASE_DB_URL}history/{device_id}.json?orderBy=\"$key\"&limitToLast=300"
             
-        res = get_http_session().get(url, timeout=5.0)
+        res = get_http_session().get(url, timeout=3.0)
         if res.status_code == 200 and res.json():
-            records = list(res.json().values())
+            data = res.json()
+            new_last_key = max(data.keys())
+            records = list(data.values())
             df = pd.DataFrame(records)
             df['timestamp'] = pd.to_datetime(df['timestamp'])
-            return df
+            return df, new_last_key
     except: pass
-    return pd.DataFrame()
+    return pd.DataFrame(), last_firebase_key
 
 @st.cache_data(ttl=3600)
 def get_full_history_data(device_id):
@@ -118,12 +120,14 @@ def get_full_history_data(device_id):
     try:
         res = get_http_session().get(f"{FIREBASE_DB_URL}history/{device_id}.json?orderBy=\"$key\"&limitToLast=6000", timeout=10.0)
         if res.status_code == 200 and res.json():
-            records = list(res.json().values())
+            data = res.json()
+            last_key = max(data.keys())
+            records = list(data.values())
             df = pd.DataFrame(records)
             df['timestamp'] = pd.to_datetime(df['timestamp'])
-            return df
+            return df, last_key
     except: pass
-    return pd.DataFrame()
+    return pd.DataFrame(), None
 
 # ---------------------------------------------------------
 # 3. SIDEBAR (FILLED WITH CONTEXT)
@@ -157,48 +161,44 @@ with st.sidebar:
 st.title("🚗 ARVIS Dashboard")
 
 if device_id:
-    # 1. FETCH FULL HISTORY ONCE (Reduces network payload by 99%)
+    # 1. FETCH FULL HISTORY ONCE 
     if "full_history_df" not in st.session_state:
-        st.session_state.full_history_df = get_full_history_data(device_id).copy()
-        
-    # 2. FETCH LIVE DATA & GAPLESS CACHE SYNC
-    latest_raw = get_live_data(device_id)
-    latest = latest_raw if latest_raw else {}
-    
-    # 🟢 NEW: Calculate the exact last millisecond of data we have to perform a gapless cache sync
-    last_known_key = None
-    if not st.session_state.full_history_df.empty:
-        last_time = st.session_state.full_history_df['timestamp'].max()
-        last_known_key = last_time.strftime("%Y%m%d_%H%M%S")
-        
-    recent_df = get_recent_history_data(device_id, last_known_key)
-    
-    # 3. STACK NEW DATA AND TRIM THE BOTTOM
-    if latest or not recent_df.empty:
-        # Convert live packet to a 1-row DataFrame
-        latest_df = pd.DataFrame([latest]) if latest else pd.DataFrame()
-        if not latest_df.empty and 'timestamp' in latest_df.columns:
-            latest_df['timestamp'] = pd.to_datetime(latest_df['timestamp'])
+        df, last_key = get_full_history_data(device_id)
+        st.session_state.full_history_df = df.copy()
+        if last_key:
+            st.session_state.last_firebase_key = last_key
             
-        # Stack both the live packet AND any offline cache packets that arrived
-        frames_to_concat = [st.session_state.full_history_df]
-        if not recent_df.empty: frames_to_concat.append(recent_df)
-        if not latest_df.empty: frames_to_concat.append(latest_df)
+    # 2. FETCH INCREMENTAL CACHE (STEP-BY-STEP)
+    last_known_key = st.session_state.get("last_firebase_key")
+    recent_df, new_last_key = get_recent_history_data(device_id, last_known_key)
+    
+    if new_last_key:
+        st.session_state.last_firebase_key = new_last_key
         
-        combined = pd.concat(frames_to_concat)
-        if 'timestamp' in combined.columns:
-            combined = combined.drop_duplicates(subset=['timestamp']).sort_values('timestamp')
-            
-            # Continuously free space from the bottom (keep only 3 hours)
-            three_hours_ago = combined['timestamp'].max() - timedelta(hours=3)
-            st.session_state.full_history_df = combined[combined['timestamp'] >= three_hours_ago]
+    # 3. STACK AND TRIM
+    if not recent_df.empty:
+        combined = pd.concat([st.session_state.full_history_df, recent_df])
+        combined = combined.drop_duplicates(subset=['timestamp']).sort_values('timestamp')
+        two_hours_ago = combined['timestamp'].max() - timedelta(hours=3)
+        st.session_state.full_history_df = combined[combined['timestamp'] >= two_hours_ago]
             
     df = st.session_state.get("full_history_df", pd.DataFrame())
     
-    # 4. CALCULATE STRICT OBD AGE (Based on pure mobile generation time!)
+    # 2. FETCH LIVE
+    latest_raw = get_live_data(device_id)
+    latest = latest_raw if latest_raw else {}
+    
+    # 3. CROSS-REFERENCE AND CALCULATE STRICT OBD AGE
     try:
         current_packet_time = latest.get("timestamp", "")
-
+        
+        # Override with history if it's fresher (bypasses broken Live nodes instantly)
+        if not df.empty:
+            freshest_history_time = str(df['timestamp'].max())
+            if freshest_history_time > current_packet_time:
+                latest = df.iloc[-1].to_dict()
+                current_packet_time = str(latest.get("timestamp", ""))
+                
         # 🟢 STRICT OBD PACKET AGE
         # We no longer trust the server arrival time. We calculate exactly how old the
         # data is based purely on when it was generated by the car.
@@ -380,22 +380,23 @@ with tab1:
         
         c5, c6, c7, c8 = st.columns(4)
         c5.metric("Coolant Temp", f"{float(latest.get('CoolantTemp', 0))} °C")
-        c6.metric("Intake Temp", f"{float(latest.get('IntakeTemp', 0))} °C")
-        c7.metric("Voltage", f"{float(latest.get('Voltage', 0))} V")
-        c8.metric("MAP Pressure", f"{float(latest.get('MAP', 0))} kPa")
+        c6.metric("Oil Temp", f"{float(latest.get('OilTemp', 0))} °C")
+        c7.metric("Intake Temp", f"{float(latest.get('IntakeTemp', 0))} °C")
+        c8.metric("Voltage", f"{float(latest.get('Voltage', 0))} V")
         
-        c9, c10, c11 = st.columns(3)
-        c9.metric("STFT / LTFT", f"{float(latest.get('STFT', 0))}% / {float(latest.get('LTFT', 0))}%")
-        c10.metric("O2 Sensor", f"{float(latest.get('O2Voltage', 0))} V")
-        c11.empty()
+        c9, c10, c11, c12 = st.columns(4)
+        c9.metric("MAP Pressure", f"{float(latest.get('MAP', 0))} kPa")
+        c10.metric("MAF Airflow", f"{float(latest.get('MAF', 0))} g/s")
+        c11.metric("STFT / LTFT", f"{float(latest.get('STFT', 0))}% / {float(latest.get('LTFT', 0))}%")
+        c12.metric("O2 Sensor", f"{float(latest.get('O2Voltage', 0))} V")
     else:
         # Show stale indicators when the feed pauses > 4 seconds
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("RPM", "--"); c2.metric("Speed", "-- km/h"); c3.metric("Engine Load", "-- %"); c4.metric("Throttle", "-- %")
         c5, c6, c7, c8 = st.columns(4)
-        c5.metric("Coolant Temp", "-- °C"); c6.metric("Intake Temp", "-- °C"); c7.metric("Voltage", "-- V"); c8.metric("MAP Pressure", "-- kPa")
-        c9, c10, c11 = st.columns(3)
-        c9.metric("STFT / LTFT", "--% / --%"); c10.metric("O2 Sensor", "-- V"); c11.empty()
+        c5.metric("Coolant Temp", "-- °C"); c6.metric("Oil Temp", "-- °C"); c7.metric("Intake Temp", "-- °C"); c8.metric("Voltage", "-- V")
+        c9, c10, c11, c12 = st.columns(4)
+        c9.metric("MAP Pressure", "-- kPa"); c10.metric("MAF Airflow", "-- g/s"); c11.metric("STFT / LTFT", "--% / --%"); c12.metric("O2 Sensor", "-- V")
 
 # ================= TAB 2: GRAPHS (LAST 5 MINS) =================
 with tab2:
@@ -424,6 +425,8 @@ with tab2:
         with g2:
             st.markdown("###### Vehicle Speed (km/h)")
             st.line_chart(df_plot, x="timestamp", y="Speed", color="#00CC96", height=200, width='stretch')
+            st.markdown("###### Oil Temp (°C)")
+            st.line_chart(df_plot, x="timestamp", y="OilTemp", color="#F4D03F", height=200, width='stretch')
             st.markdown("###### Intake Temp (°C)")
             st.line_chart(df_plot, x="timestamp", y="IntakeTemp", color="#58D68D", height=200, width='stretch')
             st.markdown("###### Long Term Fuel Trim (%)")

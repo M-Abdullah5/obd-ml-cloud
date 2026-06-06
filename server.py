@@ -23,16 +23,16 @@ class VehicleData(BaseModel):
     CoolantTemp: int
     EngineLoad: float
     IntakeTemp: int = 0
+    MAF: float = 0
     ThrottlePos: float = 0
     Voltage: float = 0
+    OilTemp: int = 0
     MAP: int = 0
+    FuelLevel: float = 0
     STFT: float = 0
     LTFT: float = 0
     O2Voltage: float = 0
     ml_prediction: str = "Healthy"
-    ml_future_status: str = "Healthy"
-    ml_future_component: str = "None"
-    ml_future_hours: float = 0.0
 
 def process_and_upload(data: VehicleData):
     """
@@ -102,13 +102,6 @@ def process_and_upload(data: VehicleData):
     except Exception as e:
         print(f"Firebase Upload Error: {e}")
 
-def update_history_background(patch_url: str, history_updates: dict):
-    """ Offloads the slow history PATCH request so the Live thread doesn't hang. """
-    try:
-        session.patch(patch_url, json=history_updates, timeout=15)
-    except Exception as e:
-        print(f"Background history update failed: {e}")
-
 def trim_history(device_id: str):
     """ Deletes old records if the history gets too large """
     try:
@@ -126,7 +119,7 @@ def trim_history(device_id: str):
     except Exception as e:
         print("Trim error:", e)
 
-def process_bulk_upload(data_list: List[VehicleData], background_tasks: BackgroundTasks = None, is_live: bool = False):
+def process_bulk_upload(data_list: List[VehicleData], background_tasks: BackgroundTasks = None):
     """ Bulk uploads an entire queue to Firebase in a single blazing fast request """
     if not data_list:
         return
@@ -134,42 +127,48 @@ def process_bulk_upload(data_list: List[VehicleData], background_tasks: Backgrou
     try:
         latest = data_list[-1]
         
-        # 🟢 FIX: STRICT THREAD SEPARATION
-        # Only update the Live Node if the request explicitly comes from the Unity Live Thread.
-        # This completely prevents the background cache thread from overwriting the dashboard with historical data!
-        if is_live:
-            live_payload = latest.dict()
-            prediction = latest.ml_prediction
+        # 🟢 FIX: ALWAYS Update Live Node!
+        # Unity was sending cache batches (> 5) when lagging. Because of the previous `is_live` check, 
+        # the Live node was completely ignored, causing it to freeze on 19-hour old packets!
+        # This forced the dashboard to incorrectly report "19 hours offline" and wait 8-10 seconds 
+        # for the History node to refresh.
+        live_payload = latest.dict()
+        prediction = latest.ml_prediction
+        
+        if "Healthy" in prediction:
+            live_payload["ml_status"] = "Healthy"
+            live_payload["ml_alert"] = "None"
+        else:
+            warnings = ["Weak_Dying_Battery", "Clogged_Air_Filter", "Engine_Overheating", "Vacuum_Leak", "Lazy_Oxygen_Sensor", "Minor_Spark_Plug_Misfire"]
+            live_payload["ml_status"] = "Warning" if prediction in warnings else "Critical"
+            live_payload["ml_alert"] = f"ML DETECTION: {prediction.replace('_', ' ')}"
             
-            if "Healthy" in prediction:
-                live_payload["ml_status"] = "Healthy"
-                live_payload["ml_alert"] = "None"
-            else:
-                warnings = ["Weak_Dying_Battery", "Clogged_Air_Filter", "Engine_Overheating", "Vacuum_Leak", "Lazy_Oxygen_Sensor", "Minor_Spark_Plug_Misfire"]
-                live_payload["ml_status"] = "Warning" if prediction in warnings else "Critical"
-                live_payload["ml_alert"] = f"ML DETECTION: {prediction.replace('_', ' ')}"
-                
-            try:
-                dt = datetime.strptime(latest.timestamp, "%Y-%m-%d %H:%M:%S")
-                packet_utc = dt - timedelta(hours=5)
-                age_seconds = (datetime.now(timezone.utc).replace(tzinfo=None) - packet_utc).total_seconds()
-            except:
-                age_seconds = 0
-                
-            if -3600 < age_seconds < 3600:
-                live_payload["server_timestamp_utc"] = datetime.now(timezone.utc).isoformat()
-                
-            session.put(f"{FIREBASE_DB_URL}live/{latest.device_id}.json", json=live_payload, timeout=5).raise_for_status()
+        # 🟢 FIX: Only inject UTC Server Time if the packet is actually from this session.
+        # If Unity pushes a 19-hour old offline cache, we DO NOT want to inject current UTC,
+        # otherwise the dashboard thinks a 19-hour old packet just arrived "live"!
+        try:
+            dt = datetime.strptime(latest.timestamp, "%Y-%m-%d %H:%M:%S")
+            # Convert packet to UTC (Assuming UTC+5 based on system context)
+            packet_utc = dt - timedelta(hours=5)
+            age_seconds = (datetime.now(timezone.utc).replace(tzinfo=None) - packet_utc).total_seconds()
+        except:
+            age_seconds = 0
+            
+        # If packet is newer than 1 hour, it's from the current drive cycle. Inject perfect server time.
+        if -3600 < age_seconds < 3600:
+            live_payload["server_timestamp_utc"] = datetime.now(timezone.utc).isoformat()
+            
+        # raise_for_status() ensures we fail loudly if Firebase rejects it!
+        session.put(f"{FIREBASE_DB_URL}live/{latest.device_id}.json", json=live_payload, timeout=5).raise_for_status()
         
         # 2. Update History in Bulk (ALL packets at once using PATCH)
         history_updates = {}
         for d in data_list:
-            # 🟢 FIX: APPEND-ONLY QUEUE FOR 100% GAPLESS SYNC
-            # Instead of using the mobile timestamp as the Firebase $key, we use the SERVER ARRIVAL TIME!
-            # If the car was offline for 1 hour, the mobile timestamps are 1 hour old. If we used them as keys,
-            # Firebase would bury them in the middle of the database, making them invisible to the dashboard!
-            # By using server arrival time, every cache dump is pushed to the VERY END of the database, 
-            # guaranteeing the dashboard instantly downloads the entire chunk!
+            # 🟢 APPEND-ONLY QUEUE FOR STEP-BY-STEP CACHE UPLOAD
+            # By indexing Firebase using the Server Arrival Time (rather than the Mobile Timestamp),
+            # any old offline cache from 3 hours ago gets correctly appended to the VERY END of the database.
+            # This allows the dashboard to safely fetch 3 hours of offline data step-by-step 
+            # without skipping or missing a single packet!
             time_key = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
             
             # Ensure no missing fields
@@ -178,20 +177,10 @@ def process_bulk_upload(data_list: List[VehicleData], background_tasks: Backgrou
             
         patch_url = f"{FIREBASE_DB_URL}history/{latest.device_id}.json"
         
-        # 🟢 FIX: ASYNCHRONOUS LIVE HISTORY
-        # Updating the History node is extremely slow (sometimes 2-3 seconds).
-        # If this is the Live Thread (is_live=True), we offload this slow PATCH to a background task
-        # so Unity gets an instant 200 OK response and can maintain its 1Hz polling rate without lagging!
-        if is_live:
-            if background_tasks:
-                background_tasks.add_task(update_history_background, patch_url, history_updates)
-            else:
-                update_history_background(patch_url, history_updates)
-        else:
-            # 🟢 CLOSED LOOP CONFIRMATION FOR CACHE THREAD
-            # If this is the Cache Thread, we MUST do it synchronously and raise_for_status().
-            # This guarantees Unity won't delete the 25 offline packets unless they are 100% saved!
-            session.patch(patch_url, json=history_updates, timeout=15).raise_for_status()
+        # 🟢 FIX: CLOSED LOOP CONFIRMATION
+        # raise_for_status() will instantly crash this function if Firebase fails.
+        # This prevents Unity from deleting its cache if Firebase didn't actually save the data!
+        session.patch(patch_url, json=history_updates, timeout=15).raise_for_status()
         
         # 3. Trim History (IN BACKGROUND)
         # 🟢 FIX: Trimming history requires a GET request that takes 500ms! 
@@ -208,13 +197,13 @@ def process_bulk_upload(data_list: List[VehicleData], background_tasks: Backgrou
         raise e
 
 @app.post("/api/upload")
-def upload_data(data: List[VehicleData], background_tasks: BackgroundTasks, is_live: bool = False):
+def upload_data(data: List[VehicleData], background_tasks: BackgroundTasks):
     """
     Unity sends data here as a JSON array (bulk upload).
     🟢 FIX: We wait for Firebase to successfully save the data BEFORE returning 200 OK.
     However, we offload the heavy 'trim_history' to a background task so Unity gets an instant response!
     """
-    process_bulk_upload(data, background_tasks, is_live)
+    process_bulk_upload(data, background_tasks)
     return {"status": "success", "message": f"Bulk processing {len(data)} items"}
 
 @app.get("/")
