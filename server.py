@@ -119,7 +119,7 @@ def trim_history(device_id: str):
     except Exception as e:
         print("Trim error:", e)
 
-def process_bulk_upload(data_list: List[VehicleData], background_tasks: BackgroundTasks = None, is_live: bool = False):
+def process_bulk_upload(data_list: List[VehicleData], background_tasks: BackgroundTasks = None):
     """ Bulk uploads an entire queue to Firebase in a single blazing fast request """
     if not data_list:
         return
@@ -127,9 +127,10 @@ def process_bulk_upload(data_list: List[VehicleData], background_tasks: Backgrou
     try:
         latest = data_list[-1]
         
-        # 🟢 FIX: ONLY Update Live Node if explicitly told to by the Express Live Thread!
-        # If the background Cache Thread uploads a block of 19-hour old data, we completely skip this!
-        if is_live:
+        # 🟢 FIX: ONLY Update Live Node if it's a real-time upload (1-2 packets)!
+        # If the background Cache Thread uploads a massive block of 25 old packets, we completely skip this
+        # so the dashboard speedometer doesn't jump backwards in time and lag!
+        if len(data_list) <= 2:
             live_payload = latest.dict()
             prediction = latest.ml_prediction
             
@@ -187,13 +188,13 @@ def process_bulk_upload(data_list: List[VehicleData], background_tasks: Backgrou
         raise e
 
 @app.post("/api/upload")
-def upload_data(data: List[VehicleData], background_tasks: BackgroundTasks, is_live: bool = False):
+def upload_data(data: List[VehicleData], background_tasks: BackgroundTasks):
     """
     Unity sends data here as a JSON array (bulk upload).
     🟢 FIX: We wait for Firebase to successfully save the data BEFORE returning 200 OK.
     However, we offload the heavy 'trim_history' to a background task so Unity gets an instant response!
     """
-    process_bulk_upload(data, background_tasks, is_live)
+    process_bulk_upload(data, background_tasks)
     return {"status": "success", "message": f"Bulk processing {len(data)} items"}
 
 @app.get("/")
