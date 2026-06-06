@@ -102,6 +102,13 @@ def process_and_upload(data: VehicleData):
     except Exception as e:
         print(f"Firebase Upload Error: {e}")
 
+def update_history_background(patch_url: str, history_updates: dict):
+    """ Offloads the slow history PATCH request so the Live thread doesn't hang. """
+    try:
+        session.patch(patch_url, json=history_updates, timeout=15)
+    except Exception as e:
+        print(f"Background history update failed: {e}")
+
 def trim_history(device_id: str):
     """ Deletes old records if the history gets too large """
     try:
@@ -169,10 +176,20 @@ def process_bulk_upload(data_list: List[VehicleData], background_tasks: Backgrou
             
         patch_url = f"{FIREBASE_DB_URL}history/{latest.device_id}.json"
         
-        # 🟢 FIX: CLOSED LOOP CONFIRMATION
-        # raise_for_status() will instantly crash this function if Firebase fails.
-        # This prevents Unity from deleting its cache if Firebase didn't actually save the data!
-        session.patch(patch_url, json=history_updates, timeout=15).raise_for_status()
+        # 🟢 FIX: ASYNCHRONOUS LIVE HISTORY
+        # Updating the History node is extremely slow (sometimes 2-3 seconds).
+        # If this is the Live Thread (is_live=True), we offload this slow PATCH to a background task
+        # so Unity gets an instant 200 OK response and can maintain its 1Hz polling rate without lagging!
+        if is_live:
+            if background_tasks:
+                background_tasks.add_task(update_history_background, patch_url, history_updates)
+            else:
+                update_history_background(patch_url, history_updates)
+        else:
+            # 🟢 CLOSED LOOP CONFIRMATION FOR CACHE THREAD
+            # If this is the Cache Thread, we MUST do it synchronously and raise_for_status().
+            # This guarantees Unity won't delete the 25 offline packets unless they are 100% saved!
+            session.patch(patch_url, json=history_updates, timeout=15).raise_for_status()
         
         # 3. Trim History (IN BACKGROUND)
         # 🟢 FIX: Trimming history requires a GET request that takes 500ms! 
