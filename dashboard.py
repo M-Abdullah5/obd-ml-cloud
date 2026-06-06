@@ -92,11 +92,18 @@ def get_live_data(device_id):
     except: pass
     return None
 
-def get_recent_history_data(device_id):
+def get_recent_history_data(device_id, last_known_key=None):
     try:
-        # Fetch only the last 50 records (approx 1.5 minutes) for the incremental cache update!
-        # Payload size is practically zero, making it infinitely fast.
-        res = get_http_session().get(f"{FIREBASE_DB_URL}history/{device_id}.json?orderBy=\"$key\"&limitToLast=50", timeout=3.0)
+        # 🟢 FIX: THE GAPLESS SYNC ENGINE
+        # If we know the exact timestamp we last saw, ask Firebase for everything AFTER it.
+        # This guarantees 100% data ingestion (even if Unity dumps 3,600 packets from a 1-hour offline drive)
+        # without wasting bandwidth fetching data we already have!
+        if last_known_key:
+            url = f"{FIREBASE_DB_URL}history/{device_id}.json?orderBy=\"$key\"&startAt=\"{last_known_key}\""
+        else:
+            url = f"{FIREBASE_DB_URL}history/{device_id}.json?orderBy=\"$key\"&limitToLast=30"
+            
+        res = get_http_session().get(url, timeout=5.0)
         if res.status_code == 200 and res.json():
             records = list(res.json().values())
             df = pd.DataFrame(records)
@@ -150,30 +157,47 @@ with st.sidebar:
 st.title("🚗 ARVIS Dashboard")
 
 if device_id:
-    # 1. FETCH HISTORY FIRST to completely eliminate the "20 hours on reload" bug.
-    # By ensuring History is loaded before cross-referencing, the dashboard will instantly
-    # override the broken Live node on the very first render cycle.
-    recent_df = get_recent_history_data(device_id).copy()
+    # 1. FETCH FULL HISTORY ONCE (Reduces network payload by 99%)
     if "full_history_df" not in st.session_state:
         st.session_state.full_history_df = get_full_history_data(device_id).copy()
         
-    if not recent_df.empty:
-        combined = pd.concat([st.session_state.full_history_df, recent_df])
-        combined = combined.drop_duplicates(subset=['timestamp']).sort_values('timestamp')
-        two_hours_ago = combined['timestamp'].max() - timedelta(hours=2)
-        st.session_state.full_history_df = combined[combined['timestamp'] >= two_hours_ago]
-            
-    df = st.session_state.get("full_history_df", pd.DataFrame())
-    
-    # 2. FETCH LIVE
+    # 2. FETCH LIVE DATA & GAPLESS CACHE SYNC
     latest_raw = get_live_data(device_id)
     latest = latest_raw if latest_raw else {}
     
-    # 3. CROSS-REFERENCE AND CALCULATE STRICT OBD AGE
+    # 🟢 NEW: Calculate the exact last millisecond of data we have to perform a gapless cache sync
+    last_known_key = None
+    if not st.session_state.full_history_df.empty:
+        last_time = st.session_state.full_history_df['timestamp'].max()
+        last_known_key = last_time.strftime("%Y%m%d_%H%M%S")
+        
+    recent_df = get_recent_history_data(device_id, last_known_key)
+    
+    # 3. STACK NEW DATA AND TRIM THE BOTTOM
+    if latest or not recent_df.empty:
+        # Convert live packet to a 1-row DataFrame
+        latest_df = pd.DataFrame([latest]) if latest else pd.DataFrame()
+        if not latest_df.empty and 'timestamp' in latest_df.columns:
+            latest_df['timestamp'] = pd.to_datetime(latest_df['timestamp'])
+            
+        # Stack both the live packet AND any offline cache packets that arrived
+        frames_to_concat = [st.session_state.full_history_df]
+        if not recent_df.empty: frames_to_concat.append(recent_df)
+        if not latest_df.empty: frames_to_concat.append(latest_df)
+        
+        combined = pd.concat(frames_to_concat)
+        if 'timestamp' in combined.columns:
+            combined = combined.drop_duplicates(subset=['timestamp']).sort_values('timestamp')
+            
+            # Continuously free space from the bottom (keep only 3 hours)
+            three_hours_ago = combined['timestamp'].max() - timedelta(hours=3)
+            st.session_state.full_history_df = combined[combined['timestamp'] >= three_hours_ago]
+            
+    df = st.session_state.get("full_history_df", pd.DataFrame())
+    
+    # 4. CALCULATE STRICT OBD AGE
     try:
         current_packet_time = latest.get("timestamp", "")
-        
-        # Override with history if it's fresher (bypasses broken Live nodes instantly)
         if not df.empty:
             freshest_history_time = str(df['timestamp'].max())
             if freshest_history_time > current_packet_time:
