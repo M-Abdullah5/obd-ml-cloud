@@ -4,6 +4,7 @@ import streamlit as st
 import plotly.express as px
 import requests
 from datetime import datetime, timedelta, timezone
+import streamlit.components.v1 as components
 
 # ---------------------------------------------------------
 # 1. PAGE CONFIG & THEME SETUP
@@ -266,14 +267,23 @@ if not df.empty and "ml_prediction" in df.columns:
                         if exact_seconds < 1: exact_seconds = len(group) * 1.5
                         
                         max_db_time = pd.to_datetime(df['timestamp'].max())
-                        is_active = (max_db_time - t_end).total_seconds() <= 5
+                        
+                        # 🟢 FIX: Handle OBD Disconnection during active alert!
+                        is_active = False
+                        was_disconnected = False
+                        if (max_db_time - t_end).total_seconds() <= 5:
+                            if is_online:
+                                is_active = True
+                            else:
+                                was_disconnected = True
                         
                         confirmed_alerts.append({
                             "Start": start_time,
                             "End": end_time,
                             "Alert": clean_alert_name,
                             "DurationSeconds": exact_seconds,
-                            "IsActive": is_active
+                            "IsActive": is_active,
+                            "WasDisconnected": was_disconnected
                         })
             confirmed_alerts.sort(key=lambda x: x['End'], reverse=True)
     except Exception as e:
@@ -291,68 +301,61 @@ future_alerts_count = 1 if future_rul_status == "Degrading" else 0
 future_badge = f"{future_alerts_count}" if future_alerts_count <= 9 else "9+"
 
 # 🟢 NEW: GLOBAL FLOATING ALERTS (TOP RIGHT)
-# Completely bypasses Streamlit's native UI restrictions. These float over ALL tabs
-# and will automatically vanish after 25 seconds, or if the user clicks the cross!
 has_floats = False
-floating_html = """
-<style>
-@keyframes slideInRight {
-    from { transform: translateX(120%); opacity: 0; }
-    to { transform: translateX(0); opacity: 1; }
-}
-</style>
-<div style="position: fixed; top: 60px; right: 20px; z-index: 999999; display: flex; flex-direction: column; gap: 10px;">
-"""
+floating_html = "<div style='position: fixed; top: 60px; right: 20px; z-index: 999999; display: flex; flex-direction: column; gap: 10px;'>"
+
+# We must collect the JS code separately so Streamlit doesn't strip it!
+js_scripts = ""
 
 for alert in confirmed_alerts:
-    # Only show if it's currently happening, and it hasn't been 25 seconds yet
     if alert['IsActive'] and alert['DurationSeconds'] <= 25.0:
         has_floats = True
-        # Unique ID based on the exact time the fault started so it resets properly on new faults
-        # 🟢 FIX: We must remove hyphens (-), colons (:), and periods (.) from the timestamp!
-        # Javascript interprets hyphens as minus signs, causing a SyntaxError in the function name!
         raw_id = f"{alert['Alert']}_{str(alert['Start'])}"
         safe_id = raw_id.replace(' ', '_').replace('-', '_').replace(':', '_').replace('.', '_')
         
+        # 🟢 FIX: Remove all indentation so Streamlit does NOT render this as a raw <pre> code block!
         floating_html += f"""
-        <div id="float_{safe_id}" style="
-            background: linear-gradient(135deg, #ff4b4b 0%, #b30000 100%);
-            color: white;
-            padding: 15px;
-            border-radius: 10px;
-            box-shadow: 0px 8px 16px rgba(0,0,0,0.5);
-            border: 2px solid white;
-            width: 300px;
-            display: none;
-            animation: slideInRight 0.3s ease-out;
-        ">
-            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.4); padding-bottom: 8px; margin-bottom: 8px;">
-                <span style="font-weight: bold; font-size: 12px; letter-spacing: 1px;">⚠️ ENGINE FAULT DETECTED</span>
-                <span onclick="dismissHover_{safe_id}()" style="cursor: pointer; font-size: 14px; background: rgba(0,0,0,0.3); padding: 4px 8px; border-radius: 5px;">✖</span>
-            </div>
-            <div style="font-size: 16px; font-weight: bold; margin-bottom: 4px;">{alert['Alert']}</div>
-            <div style="font-size: 12px; opacity: 0.9;">Ongoing for {int(alert['DurationSeconds'])}s</div>
-        </div>
-        
-        <script>
-            function dismissHover_{safe_id}() {{
-                sessionStorage.setItem('dismiss_{safe_id}', 'true');
-                var el = document.getElementById('float_{safe_id}');
-                if(el) el.style.display = 'none';
-            }}
-            
-            // On every 1.5s rerun, immediately check if the user previously closed this specific alert
-            if (sessionStorage.getItem('dismiss_{safe_id}') !== 'true') {{
-                var el = document.getElementById('float_{safe_id}');
-                if(el) el.style.display = 'block';
-            }}
-        </script>
-        """
+<div id="float_{safe_id}" style="background: linear-gradient(135deg, #ff4b4b 0%, #b30000 100%); color: white; padding: 15px; border-radius: 10px; box-shadow: 0px 8px 16px rgba(0,0,0,0.5); border: 2px solid white; width: 300px; display: block;">
+<div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.4); padding-bottom: 8px; margin-bottom: 8px;">
+<span style="font-weight: bold; font-size: 12px; letter-spacing: 1px;">⚠️ ENGINE FAULT DETECTED</span>
+<span id="close_{safe_id}" style="cursor: pointer; font-size: 14px; background: rgba(0,0,0,0.3); padding: 4px 8px; border-radius: 5px;">✖</span>
+</div>
+<div style="font-size: 16px; font-weight: bold; margin-bottom: 4px;">{alert['Alert']}</div>
+<div style="font-size: 12px; opacity: 0.9;">Ongoing for {int(alert['DurationSeconds'])}s</div>
+</div>
+"""
+        # 🟢 FIX: Break out of the components iframe to access the parent Streamlit DOM!
+        js_scripts += f"""
+    // Hide immediately if already dismissed
+    if (session.getItem('dismiss_{safe_id}') === 'true') {{
+        const el = parent.getElementById('float_{safe_id}');
+        if (el) el.style.display = 'none';
+    }}
+    
+    // Bind click event natively
+    const btn = parent.getElementById('close_{safe_id}');
+    if (btn) {{
+        btn.onclick = function() {{
+            session.setItem('dismiss_{safe_id}', 'true');
+            parent.getElementById('float_{safe_id}').style.display = 'none';
+        }};
+    }}
+"""
 
 floating_html += "</div>"
 
 if has_floats:
+    # 1. Inject the HTML into the main DOM
     st.markdown(floating_html, unsafe_allow_html=True)
+    
+    # 2. Safely execute the Javascript via an invisible iframe to bind the buttons!
+    components.html(f"""
+    <script>
+        const parent = window.parent.document;
+        const session = window.parent.sessionStorage;
+        {js_scripts}
+    </script>
+    """, height=0)
 
 # ---------------------------------------------------------
 # 6. TABBED INTERFACE
@@ -484,6 +487,12 @@ with tab4:
                     time_text = f"<b>Started:</b> {alert['Start']} (Ongoing for {duration_text})"
                     border_color = "#ff4b4b"
                     bg_color = "#631313" 
+                elif alert.get('WasDisconnected', False):
+                    # 🟢 FIX: Explicitly indicate if the OBD disconnected during the fault
+                    status_badge = "<span style='background-color: #f39c12; color: white; padding: 2px 8px; border-radius: 10px; font-size: 12px; margin-left: 10px;'>🔌 RESOLVED (OBD DISCONNECTED)</span>"
+                    time_text = f"<b>Time:</b> {alert['Start']} to {alert['End']}<br><b>Total Duration:</b> {duration_text} before signal loss"
+                    border_color = "#f39c12"
+                    bg_color = "#333"
                 else:
                     status_badge = "<span style='background-color: #555; color: white; padding: 2px 8px; border-radius: 10px; font-size: 12px; margin-left: 10px;'>✅ RESOLVED</span>"
                     time_text = f"<b>Time:</b> {alert['Start']} to {alert['End']}<br><b>Total Duration:</b> {duration_text}"
