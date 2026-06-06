@@ -22,6 +22,15 @@ st.markdown("""
 
 FIREBASE_DB_URL = "https://arapp-feb0f-default-rtdb.firebaseio.com/"
 
+@st.cache_resource
+def get_http_session():
+    """ 🟢 FIX: Global HTTP Session to prevent recreating TLS handshakes every 1.5 seconds.
+    This massively speeds up Render free-tier fetching! """
+    session = requests.Session()
+    adapter = requests.adapters.HTTPAdapter(pool_connections=10, pool_maxsize=10)
+    session.mount('https://', adapter)
+    return session
+
 # ---------------------------------------------------------
 # 2. HELPER FUNCTIONS
 # ---------------------------------------------------------
@@ -68,7 +77,7 @@ def format_offline_duration(seconds):
 @st.cache_data(ttl=3)
 def get_devices():
     try:
-        res = requests.get(f"{FIREBASE_DB_URL}live.json?shallow=true")
+        res = get_http_session().get(f"{FIREBASE_DB_URL}live.json?shallow=true", timeout=3.0)
         if res.status_code == 200 and res.json():
             return list(res.json().keys())
     except: pass
@@ -76,7 +85,8 @@ def get_devices():
 
 def get_live_data(device_id):
     try:
-        res = requests.get(f"{FIREBASE_DB_URL}live/{device_id}.json", timeout=2.0)
+        # 🟢 FIX: Use pooled session for lightning-fast fetching
+        res = get_http_session().get(f"{FIREBASE_DB_URL}live/{device_id}.json", timeout=1.5)
         if res.status_code == 200: return res.json()
     except: pass
     return None
@@ -85,7 +95,7 @@ def get_recent_history_data(device_id):
     try:
         # Fetch only the last 50 records (approx 1.5 minutes) for the incremental cache update!
         # Payload size is practically zero, making it infinitely fast.
-        res = requests.get(f"{FIREBASE_DB_URL}history/{device_id}.json?orderBy=\"$key\"&limitToLast=50")
+        res = get_http_session().get(f"{FIREBASE_DB_URL}history/{device_id}.json?orderBy=\"$key\"&limitToLast=50", timeout=3.0)
         if res.status_code == 200 and res.json():
             records = list(res.json().values())
             df = pd.DataFrame(records)
@@ -98,7 +108,7 @@ def get_recent_history_data(device_id):
 def get_full_history_data(device_id):
     """ Only called ONCE when the dashboard first loads to build the initial 3-hour cache """
     try:
-        res = requests.get(f"{FIREBASE_DB_URL}history/{device_id}.json?orderBy=\"$key\"&limitToLast=6000")
+        res = get_http_session().get(f"{FIREBASE_DB_URL}history/{device_id}.json?orderBy=\"$key\"&limitToLast=6000", timeout=10.0)
         if res.status_code == 200 and res.json():
             records = list(res.json().values())
             df = pd.DataFrame(records)
@@ -207,9 +217,9 @@ if device_id:
             else:
                 seconds_ago = time.time() - shared_state["last_arrival_time"]
             
-            # 🟢 FIX: Increased freshness threshold to 6 seconds to prevent random "--" dashes
+            # 🟢 FIX: Tightened freshness threshold to 3.5 seconds to ensure dashboard is STRICTLY live!
             is_online = seconds_ago <= 15
-            is_live_data_fresh = seconds_ago <= 6
+            is_live_data_fresh = seconds_ago <= 3.5
         except Exception as e:
             is_online = False
             is_live_data_fresh = False
@@ -486,7 +496,8 @@ with tab5:
 # ---------------------------------------------------------
 # 🟢 FIX: Optimized Refresh Rates for Continuous Flow
 if is_online:
-    time.sleep(1.0) # Down to 1.0s to catch new Unity packets instantly!
+    # 🟢 FIX: Updated to 1.5s exact sleep to match Render free-tier capabilities without overloading it
+    time.sleep(1.5) 
     st.rerun()
 else:
     time.sleep(3.0) # Faster offline recovery polling
