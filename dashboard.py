@@ -170,18 +170,25 @@ if device_id:
             if not temp_df.empty:
                 freshest_history_time = str(temp_df['timestamp'].max())
                 if freshest_history_time > current_packet_time:
-                    # History node has newer data than Live node! Extract it to fix the freeze!
                     latest = temp_df.iloc[-1].to_dict()
                     current_packet_time = str(latest.get("timestamp", ""))
             
             if current_packet_time != shared_state["last_seen_packet"]:
-                shared_state["last_seen_packet"] = current_packet_time
-                shared_state["last_arrival_time"] = time.time()
+                if shared_state["last_seen_packet"] == "":
+                    # 🟢 FIX: FIRST LOAD! Do NOT assume it is online just because we loaded the page!
+                    # We must wait to see if the packet actually changes in the next cycle!
+                    shared_state["last_seen_packet"] = current_packet_time
+                    shared_state["last_arrival_time"] = 0 # Forces it offline immediately!
+                else:
+                    # The data actually changed! The connection is definitively active!
+                    shared_state["last_seen_packet"] = current_packet_time
+                    shared_state["last_arrival_time"] = time.time()
                 
             seconds_ago = time.time() - shared_state["last_arrival_time"]
             
+            # 🟢 FIX: Increased freshness threshold to 6 seconds to prevent random "--" dashes
             is_online = seconds_ago <= 15
-            is_live_data_fresh = seconds_ago <= 4
+            is_live_data_fresh = seconds_ago <= 6
         except Exception as e:
             is_online = False
             is_live_data_fresh = False
@@ -456,12 +463,10 @@ with tab5:
 # ---------------------------------------------------------
 # 7. AUTO-REFRESH LOGIC
 # ---------------------------------------------------------
-# 🟢 FIX: Optimized Refresh Rates
-# Refreshing too fast blocks the browser and creates lag/stuttering. 
-# Unity only uploads every 2 seconds anyway!
+# 🟢 FIX: Optimized Refresh Rates for Continuous Flow
 if is_online:
-    time.sleep(1.5) # Nyquist offset: slightly out of sync with Unity's 1.8s to avoid harmonic delay
+    time.sleep(1.0) # Down to 1.0s to catch new Unity packets instantly!
     st.rerun()
 else:
-    time.sleep(5) # Slow down when offline to completely unblock the server
+    time.sleep(3.0) # Faster offline recovery polling
     st.rerun()
