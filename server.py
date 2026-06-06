@@ -127,7 +127,18 @@ def process_bulk_upload(data_list: List[VehicleData], background_tasks: Backgrou
     try:
         latest = data_list[-1]
         
-        # 🟢 FIX: Calculate absolute packet age exactly as requested by the user.
+        # 🟢 FIX: ALWAYS Update Live Node!
+        # Reverting to the exact proven architecture from server1.py
+        live_payload = latest.dict()
+        prediction = latest.ml_prediction
+        
+        if "Healthy" in prediction:
+            live_payload["ml_status"] = "Healthy"
+            live_payload["ml_alert"] = "None"
+        else:
+            live_payload["ml_status"] = "Warning" if prediction in ["Clogged_Filter", "Bad_Alternator"] else "Critical"
+            live_payload["ml_alert"] = f"ML DETECTION: {prediction.replace('_', ' ')}"
+            
         try:
             dt = datetime.strptime(latest.timestamp, "%Y-%m-%d %H:%M:%S")
             # Convert packet to UTC (Assuming UTC+5 based on system context)
@@ -136,25 +147,11 @@ def process_bulk_upload(data_list: List[VehicleData], background_tasks: Backgrou
         except:
             age_seconds = 0
             
-        # 🟢 FIX: Explicit 4-second age gate.
-        # "If data more than 3-4 seconds old, then it must not be considered Live and must not be in live tab ever in future."
-        # If the background Cache Thread uploads a block of older offline data, we completely skip this!
-        if age_seconds <= 4.0:
-            live_payload = latest.dict()
-            prediction = latest.ml_prediction
+        # If packet is newer than 1 hour, it's from the current drive cycle. Inject perfect server time.
+        if -3600 < age_seconds < 3600:
+            live_payload["server_timestamp_utc"] = datetime.now(timezone.utc).isoformat()
             
-            if "Healthy" in prediction:
-                live_payload["ml_status"] = "Healthy"
-                live_payload["ml_alert"] = "None"
-            else:
-                live_payload["ml_status"] = "Warning" if prediction in ["Clogged_Filter", "Bad_Alternator"] else "Critical"
-                live_payload["ml_alert"] = f"ML DETECTION: {prediction.replace('_', ' ')}"
-                
-            # If packet is newer than 1 hour, it's from the current drive cycle. Inject perfect server time.
-            if -3600 < age_seconds < 3600:
-                live_payload["server_timestamp_utc"] = datetime.now(timezone.utc).isoformat()
-                
-            session.put(f"{FIREBASE_DB_URL}live/{latest.device_id}.json", json=live_payload, timeout=5).raise_for_status()
+        session.put(f"{FIREBASE_DB_URL}live/{latest.device_id}.json", json=live_payload, timeout=5).raise_for_status()
         
         # 2. Update History in Bulk (ALL packets at once using PATCH)
         history_updates = {}
