@@ -3,7 +3,7 @@ import pandas as pd
 import streamlit as st
 import plotly.express as px
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 # ---------------------------------------------------------
 # 1. PAGE CONFIG & THEME SETUP
@@ -124,7 +124,7 @@ with st.sidebar:
     # 🟢 FIX: Use columns to perfectly center the new transparent logo and make it larger!
     c1, c2, c3 = st.columns([1, 3, 1])
     with c2:
-        st.image("ARVIS2.png", use_column_width=True)
+        st.image("ARVIS2.png")
         
     st.title("Vehicle Profile")
     
@@ -194,7 +194,7 @@ if device_id:
                 # Fallback to phone's time if missing
                 packet_utc = pd.to_datetime(current_packet_time) - timedelta(hours=5)
                 
-            absolute_seconds_ago = (datetime.utcnow() - packet_utc).total_seconds()
+            absolute_seconds_ago = (datetime.now(timezone.utc).replace(tzinfo=None) - packet_utc).total_seconds()
             
             if current_packet_time != shared_state["last_seen_packet"]:
                 if shared_state["last_seen_packet"] == "":
@@ -343,33 +343,33 @@ with tab2:
         g1, g2, g3 = st.columns(3)
         with g1:
             st.markdown("###### Engine RPM")
-            st.line_chart(df_plot, x="timestamp", y="RPM", color="#FF4B4B", height=200, use_container_width=True)
+            st.line_chart(df_plot, x="timestamp", y="RPM", color="#FF4B4B", height=200, width='stretch')
             st.markdown("###### Coolant Temp (°C)")
-            st.line_chart(df_plot, x="timestamp", y="CoolantTemp", color="#FFA500", height=200, use_container_width=True)
+            st.line_chart(df_plot, x="timestamp", y="CoolantTemp", color="#FFA500", height=200, width='stretch')
             st.markdown("###### MAP Pressure (kPa)")
-            st.line_chart(df_plot, x="timestamp", y="MAP", color="#AB63FA", height=200, use_container_width=True)
+            st.line_chart(df_plot, x="timestamp", y="MAP", color="#AB63FA", height=200, width='stretch')
             st.markdown("###### Short Term Fuel Trim (%)")
-            st.line_chart(df_plot, x="timestamp", y="STFT", color="#E2D9F3", height=200, use_container_width=True)
+            st.line_chart(df_plot, x="timestamp", y="STFT", color="#E2D9F3", height=200, width='stretch')
             
         with g2:
             st.markdown("###### Vehicle Speed (km/h)")
-            st.line_chart(df_plot, x="timestamp", y="Speed", color="#00CC96", height=200, use_container_width=True)
+            st.line_chart(df_plot, x="timestamp", y="Speed", color="#00CC96", height=200, width='stretch')
             st.markdown("###### Oil Temp (°C)")
-            st.line_chart(df_plot, x="timestamp", y="OilTemp", color="#F4D03F", height=200, use_container_width=True)
+            st.line_chart(df_plot, x="timestamp", y="OilTemp", color="#F4D03F", height=200, width='stretch')
             st.markdown("###### Intake Temp (°C)")
-            st.line_chart(df_plot, x="timestamp", y="IntakeTemp", color="#58D68D", height=200, use_container_width=True)
+            st.line_chart(df_plot, x="timestamp", y="IntakeTemp", color="#58D68D", height=200, width='stretch')
             st.markdown("###### Long Term Fuel Trim (%)")
-            st.line_chart(df_plot, x="timestamp", y="LTFT", color="#A569BD", height=200, use_container_width=True)
+            st.line_chart(df_plot, x="timestamp", y="LTFT", color="#A569BD", height=200, width='stretch')
             
         with g3:
             st.markdown("###### Engine Load (%)")
-            st.line_chart(df_plot, x="timestamp", y="EngineLoad", color="#636EFA", height=200, use_container_width=True)
+            st.line_chart(df_plot, x="timestamp", y="EngineLoad", color="#636EFA", height=200, width='stretch')
             st.markdown("###### Throttle Position (%)")
-            st.line_chart(df_plot, x="timestamp", y="ThrottlePos", color="#1ABC9C", height=200, use_container_width=True)
+            st.line_chart(df_plot, x="timestamp", y="ThrottlePos", color="#1ABC9C", height=200, width='stretch')
             st.markdown("###### Battery Voltage (V)")
-            st.line_chart(df_plot, x="timestamp", y="Voltage", color="#F39C12", height=200, use_container_width=True)
+            st.line_chart(df_plot, x="timestamp", y="Voltage", color="#F39C12", height=200, width='stretch')
             st.markdown("###### O2 Sensor (V)")
-            st.line_chart(df_plot, x="timestamp", y="O2Voltage", color="#E74C3C", height=200, use_container_width=True)
+            st.line_chart(df_plot, x="timestamp", y="O2Voltage", color="#E74C3C", height=200, width='stretch')
             
     else:
         st.info("No historical data available yet. Start the engine to generate graphs!")
@@ -393,7 +393,7 @@ with tab3:
         st.caption("Displaying the full 3-hour history seamlessly from the local memory cache.")
             
         # Display perfectly sorted, most recent first, without the ugly index column
-        st.dataframe(df_table.sort_values(["Date", "Time (Local)"], ascending=[False, False]), hide_index=True, use_container_width=True)
+        st.dataframe(df_table.sort_values(["Date", "Time (Local)"], ascending=[False, False]), hide_index=True, width='stretch')
     else:
         st.info("Database is entirely blank. No historical logs exist.")
 

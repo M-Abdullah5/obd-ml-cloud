@@ -1,6 +1,6 @@
 import os
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List
 from fastapi import FastAPI, BackgroundTasks, Request
 from pydantic import BaseModel
@@ -149,13 +149,13 @@ def process_bulk_upload(data_list: List[VehicleData], background_tasks: Backgrou
             dt = datetime.strptime(latest.timestamp, "%Y-%m-%d %H:%M:%S")
             # Convert packet to UTC (Assuming UTC+5 based on system context)
             packet_utc = dt - timedelta(hours=5)
-            age_seconds = (datetime.utcnow() - packet_utc).total_seconds()
+            age_seconds = (datetime.now(timezone.utc).replace(tzinfo=None) - packet_utc).total_seconds()
         except:
             age_seconds = 0
             
         # If packet is newer than 1 hour, it's from the current drive cycle. Inject perfect server time.
         if -3600 < age_seconds < 3600:
-            live_payload["server_timestamp_utc"] = datetime.utcnow().isoformat()
+            live_payload["server_timestamp_utc"] = datetime.now(timezone.utc).isoformat()
             
         # raise_for_status() ensures we fail loudly if Firebase rejects it!
         session.put(f"{FIREBASE_DB_URL}live/{latest.device_id}.json", json=live_payload, timeout=5).raise_for_status()
