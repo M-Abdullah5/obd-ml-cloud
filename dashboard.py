@@ -53,13 +53,16 @@ def format_offline_duration(seconds):
     h, m = divmod(m, 60)
     d, h = divmod(h, 24)
     mo, d = divmod(d, 30)
+    y, mo = divmod(mo, 12)
     
     parts = []
+    if y > 0: parts.append(f"{y} year{'s' if y != 1 else ''}")
     if mo > 0: parts.append(f"{mo} month{'s' if mo != 1 else ''}")
     if d > 0: parts.append(f"{d} day{'s' if d != 1 else ''}")
-    if h > 0: parts.append(f"{h} hr{'s' if h != 1 else ''}")
-    if m > 0: parts.append(f"{m} min{'s' if m != 1 else ''}")
-    if s > 0 or len(parts) == 0: parts.append(f"{s} sec")
+    if h > 0: parts.append(f"{h} hour{'s' if h != 1 else ''}")
+    if m > 0: parts.append(f"{m} minute{'s' if m != 1 else ''}")
+    if s > 0 or len(parts) == 0: parts.append(f"{s} second{'s' if s != 1 else ''}")
+    
     return ", ".join(parts)
 
 @st.cache_data(ttl=3)
@@ -73,14 +76,8 @@ def get_devices():
 
 def get_live_data(device_id):
     try:
-        # 🟢 THE ULTIMATE FIX: Bypass the Live node entirely!
-        # If the History graphs are receiving data, we just mathematically grab the absolute 
-        # newest packet straight from the History node (limitToLast=1) to ensure 100% sync!
-        res = requests.get(f"{FIREBASE_DB_URL}history/{device_id}.json?orderBy=\"$key\"&limitToLast=1", timeout=2.0)
-        if res.status_code == 200: 
-            data = res.json()
-            if data:
-                return list(data.values())[-1]
+        res = requests.get(f"{FIREBASE_DB_URL}live/{device_id}.json", timeout=2.0)
+        if res.status_code == 200: return res.json()
     except: pass
     return None
 
@@ -178,18 +175,31 @@ if device_id:
                     latest = temp_df.iloc[-1].to_dict()
                     current_packet_time = str(latest.get("timestamp", ""))
             
+            # 🟢 FIX: Absolute Time Calculation for "Offline for a month" requirement
+            # Convert phone's Pakistan time to UTC to compare with Streamlit server
+            packet_time_utc5 = pd.to_datetime(current_packet_time)
+            packet_utc = packet_time_utc5 - timedelta(hours=5)
+            absolute_seconds_ago = (datetime.utcnow() - packet_utc).total_seconds()
+            
             if current_packet_time != shared_state["last_seen_packet"]:
                 if shared_state["last_seen_packet"] == "":
-                    # 🟢 FIX: FIRST LOAD! Do NOT assume it is online just because we loaded the page!
-                    # We must wait to see if the packet actually changes in the next cycle!
+                    # First load! 
                     shared_state["last_seen_packet"] = current_packet_time
-                    shared_state["last_arrival_time"] = 0 # Forces it offline immediately!
+                    # If it's genuinely an old packet (e.g. > 2 minutes), show exact absolute offline time!
+                    if absolute_seconds_ago > 120:
+                        shared_state["last_arrival_time"] = time.time() - absolute_seconds_ago
+                    else:
+                        shared_state["last_arrival_time"] = 0 # Force offline until next cycle proves it's live
                 else:
                     # The data actually changed! The connection is definitively active!
                     shared_state["last_seen_packet"] = current_packet_time
                     shared_state["last_arrival_time"] = time.time()
                 
-            seconds_ago = time.time() - shared_state["last_arrival_time"]
+            # If the absolute difference is huge (>5 mins), trust it absolutely (ignores minor phone clock drift)
+            if absolute_seconds_ago > 300:
+                seconds_ago = absolute_seconds_ago
+            else:
+                seconds_ago = time.time() - shared_state["last_arrival_time"]
             
             # 🟢 FIX: Increased freshness threshold to 6 seconds to prevent random "--" dashes
             is_online = seconds_ago <= 15

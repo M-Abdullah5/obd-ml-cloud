@@ -126,14 +126,15 @@ def process_bulk_upload(data_list: List[VehicleData]):
         
     try:
         latest = data_list[-1]
-        
-        # 🟢 FIX: Flawless Live Detection (Timezone Independent)
-        # Instead of guessing the phone's timezone, we simply check if the packet
-        # claims to be in the future, or is reasonably close to the server's time (ignoring hours, only checking seconds diff)
-        # OR just force it live if it just arrived and is the latest packet.
-        # Actually, let's just always update the Live node with the newest packet in the batch,
-        # but inject a SERVER timestamp so Streamlit knows exactly when it arrived!
-        is_live = True
+        # 🟢 FIX: Flawless Live Detection (Protects Live Node from Cache Overwrites)
+        # Unity sends both Live packets and old Offline Cache batches.
+        # We MUST NOT overwrite the Live node if the packet is an old cache upload!
+        try:
+            packet_utc = datetime.strptime(latest.timestamp, "%Y-%m-%d %H:%M:%S") - timedelta(hours=5)
+            # If the packet is within 60 seconds of reality, it is a genuine live packet
+            is_live = abs((datetime.utcnow() - packet_utc).total_seconds()) < 60
+        except:
+            is_live = False
 
         if is_live:
             # 1. Update Live (Only the most recent packet)
