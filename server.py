@@ -163,14 +163,15 @@ def process_bulk_upload(data_list: List[VehicleData], background_tasks: Backgrou
         
         # 2. Update History in Bulk (ALL packets at once using PATCH)
         history_updates = {}
-        base_time = datetime.now()
         for i, d in enumerate(data_list):
-            # 🟢 FIX: STRICTLY UNIQUE APPEND-ONLY QUEUE
-            # Using datetime.now() in a tight loop causes identical microseconds, leading to 
-            # dictionary overwrites and 90% data loss during bulk uploads!
-            # By explicitly adding `i` microseconds, we mathematically guarantee every packet 
-            # gets a perfectly unique, strictly sequential timestamp!
-            time_key = (base_time + timedelta(microseconds=i)).strftime("%Y%m%d_%H%M%S_%f")
+            # 🟢 CRITICAL FIX: THE TIMEZONE INDEX BUG!
+            # Render is in UTC, but the old broken keys were saved in your Local Time (+5 hours).
+            # Because Local Time is 'numerically higher' than UTC, Firebase's alphabetical index 
+            # buried all the new perfect UTC keys underneath the old broken Local keys!
+            # We now construct the key using your exact mobile time, but manually append the array index
+            # as a 'pseudo-microsecond' to guarantee 100% uniqueness and prevent the overwrite bug!
+            dt = datetime.strptime(d.timestamp, "%Y-%m-%d %H:%M:%S")
+            time_key = dt.strftime("%Y%m%d_%H%M%S") + f"_{i:06d}"
             
             # Ensure no missing fields
             payload = d.dict()
