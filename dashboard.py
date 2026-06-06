@@ -194,7 +194,8 @@ if device_id:
                     if absolute_seconds_ago > 120:
                         shared_state["last_arrival_time"] = time.time() - absolute_seconds_ago
                     else:
-                        shared_state["last_arrival_time"] = 0 # Force offline until next cycle proves it's live
+                        # 🟢 FIX: Initialize to 15 seconds ago (NOT 0) to avoid showing "57 years" (UNIX epoch)
+                        shared_state["last_arrival_time"] = time.time() - 15 
                 else:
                     # The data actually changed! The connection is definitively active!
                     shared_state["last_seen_packet"] = current_packet_time

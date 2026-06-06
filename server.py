@@ -181,7 +181,7 @@ def process_bulk_upload(data_list: List[VehicleData]):
         raise e
 
 @app.post("/api/upload")
-async def upload_data(data: List[VehicleData]):
+def upload_data(data: List[VehicleData]):
     """
     Unity sends data here as a JSON array (bulk upload).
     🟢 FIX: We intentionally REMOVED background_tasks!
