@@ -119,7 +119,7 @@ def trim_history(device_id: str):
     except Exception as e:
         print("Trim error:", e)
 
-def process_bulk_upload(data_list: List[VehicleData]):
+def process_bulk_upload(data_list: List[VehicleData], background_tasks: BackgroundTasks = None):
     """ Bulk uploads an entire queue to Firebase in a single blazing fast request """
     if not data_list:
         return
@@ -127,11 +127,10 @@ def process_bulk_upload(data_list: List[VehicleData]):
     try:
         latest = data_list[-1]
         # 🟢 FIX: Flawless Timezone-Independent Live Detection!
-        # Unity's LiveUploadLoop sends exactly 1 packet at a time.
-        # Unity's CacheUploadLoop sends batches of up to 25 packets.
-        # Therefore, if the batch size is exactly 1, we mathematically KNOW it is the live stream!
-        # This completely ignores phone clock drift and timezones!
-        is_live = len(data_list) == 1
+        # Unity's LiveUploadLoop sends 1 packet, but slight network jitter causes batches of 2-3.
+        # Exact `== 1` caused the server to completely drop live updates during minor lag spikes!
+        # Cache uploads are large (up to 25), so <= 5 safely captures the live stream even with jitter.
+        is_live = len(data_list) <= 5
 
         if is_live:
             # 1. Update Live (Only the most recent packet)
@@ -171,8 +170,13 @@ def process_bulk_upload(data_list: List[VehicleData]):
         # This prevents Unity from deleting its cache if Firebase didn't actually save the data!
         session.patch(patch_url, json=history_updates, timeout=15).raise_for_status()
         
-        # 3. Trim History
-        trim_history(latest.device_id)
+        # 3. Trim History (IN BACKGROUND)
+        # 🟢 FIX: Trimming history requires a GET request that takes 500ms! 
+        # Doing this synchronously was slowing down the Unity response loop and causing 8-9 second delays.
+        if background_tasks:
+            background_tasks.add_task(trim_history, latest.device_id)
+        else:
+            trim_history(latest.device_id)
         
     except Exception as e:
         print(f"Bulk Upload Error: {e}")
@@ -181,14 +185,13 @@ def process_bulk_upload(data_list: List[VehicleData]):
         raise e
 
 @app.post("/api/upload")
-def upload_data(data: List[VehicleData]):
+def upload_data(data: List[VehicleData], background_tasks: BackgroundTasks):
     """
     Unity sends data here as a JSON array (bulk upload).
-    🟢 FIX: We intentionally REMOVED background_tasks!
-    We now strictly wait for Firebase to successfully save the data BEFORE returning 200 OK.
-    This creates a closed-loop system guaranteeing zero data loss.
+    🟢 FIX: We wait for Firebase to successfully save the data BEFORE returning 200 OK.
+    However, we offload the heavy 'trim_history' to a background task so Unity gets an instant response!
     """
-    process_bulk_upload(data)
+    process_bulk_upload(data, background_tasks)
     return {"status": "success", "message": f"Bulk processing {len(data)} items"}
 
 @app.get("/")

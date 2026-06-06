@@ -217,12 +217,14 @@ if device_id:
             else:
                 seconds_ago = time.time() - shared_state["last_arrival_time"]
             
-            # 🟢 FIX: Tightened freshness threshold to 3.5 seconds to ensure dashboard is STRICTLY live!
+            # 🟢 FIX: Split tracking logic as requested
             is_online = seconds_ago <= 15
-            is_live_data_fresh = seconds_ago <= 3.5
+            is_display_fresh = seconds_ago <= 6.0      # Shows '--' after 6 seconds
+            is_actually_live = seconds_ago <= 3.5      # Considered "Live" only if < 3.5s
         except Exception as e:
             is_online = False
-            is_live_data_fresh = False
+            is_display_fresh = False
+            is_actually_live = False
             seconds_ago = 9999
             
     # 🟢 CRITICAL PERFORMANCE OPTIMIZATION
@@ -259,19 +261,24 @@ if device_id:
             
     if not latest_raw:
         is_online = False
-        is_live_data_fresh = False
+        is_display_fresh = False
+        is_actually_live = False
         latest = None
         seconds_ago = 9999
 else:
     is_online = False
-    is_live_data_fresh = False
+    is_display_fresh = False
+    is_actually_live = False
     latest = None
     df = pd.DataFrame()
     seconds_ago = 9999
 
 # Status Banner
 if is_online:
-    st.success("🟢 **SYSTEM ONLINE** — Live Data Streaming Active")
+    if is_actually_live:
+        st.success("🟢 **SYSTEM ONLINE** — Live Data Streaming Active")
+    else:
+        st.warning(f"🟡 **DATA DELAYED** — Last packet received {int(seconds_ago)}s ago. Waiting for live sync...")
 else:
     if latest:
         offline_text = format_offline_duration(seconds_ago)
@@ -293,7 +300,7 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Live Metrics", "📈 Graphs", "�
 with tab1:
     st.subheader("Real-Time Engine Status")
     
-    if latest and is_online and is_live_data_fresh:
+    if latest and is_online and is_display_fresh:
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("RPM", int(latest.get("RPM", 0)))
         c2.metric("Speed", f"{int(latest.get('Speed', 0))} km/h")
@@ -496,9 +503,10 @@ with tab5:
 # ---------------------------------------------------------
 # 🟢 FIX: Optimized Refresh Rates for Continuous Flow
 if is_online:
-    # 🟢 FIX: Updated to 1.5s exact sleep to match Render free-tier capabilities without overloading it
-    time.sleep(1.5) 
+    # 🟢 FIX: Streamlit's internal execution and network roundtrip takes ~0.5s to 1.0s.
+    # To achieve a TRUE 1.5s update interval on the screen, we sleep for exactly 0.5s!
+    time.sleep(0.5) 
     st.rerun()
 else:
-    time.sleep(3.0) # Faster offline recovery polling
+    time.sleep(1.5) # Faster offline recovery polling
     st.rerun()
