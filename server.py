@@ -164,11 +164,13 @@ def process_bulk_upload(data_list: List[VehicleData], background_tasks: Backgrou
         # 2. Update History in Bulk (ALL packets at once using PATCH)
         history_updates = {}
         for d in data_list:
-            try:
-                dt = datetime.strptime(d.timestamp, "%Y-%m-%d %H:%M:%S")
-                time_key = dt.strftime("%Y%m%d_%H%M%S")
-            except:
-                time_key = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            # 🟢 FIX: APPEND-ONLY QUEUE FOR 100% GAPLESS SYNC
+            # Instead of using the mobile timestamp as the Firebase $key, we use the SERVER ARRIVAL TIME!
+            # If the car was offline for 1 hour, the mobile timestamps are 1 hour old. If we used them as keys,
+            # Firebase would bury them in the middle of the database, making them invisible to the dashboard!
+            # By using server arrival time, every cache dump is pushed to the VERY END of the database, 
+            # guaranteeing the dashboard instantly downloads the entire chunk!
+            time_key = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
             
             # Ensure no missing fields
             payload = d.dict()
