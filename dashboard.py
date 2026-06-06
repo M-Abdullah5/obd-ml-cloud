@@ -354,62 +354,84 @@ with tab4:
     
     if not df.empty and "ml_prediction" in df.columns:
         try:
+            # 🟢 FIX: Support Multiple Simultaneous Alerts
+            # Explode comma-separated alerts (e.g. "Misfire, Overheating") into separate rows
             df_alerts = df.copy()
-            # 🟢 FIX: Calculate Block IDs *BEFORE* filtering!
-            # This ensures that if Misfire happens, then Healthy, then Misfire again,
-            # they are treated as completely separate alerts, rather than merged together!
-            df_alerts['Block'] = (df_alerts['ml_prediction'] != df_alerts['ml_prediction'].shift(1)).cumsum()
+            df_alerts['ml_prediction'] = df_alerts['ml_prediction'].astype(str).str.split(',')
+            df_alerts = df_alerts.explode('ml_prediction')
+            df_alerts['ml_prediction'] = df_alerts['ml_prediction'].str.strip()
             
             # Now filter out healthy states
-            df_faults = df_alerts[~df_alerts['ml_prediction'].str.contains("Healthy", na=False)].copy()
+            df_faults = df_alerts[~df_alerts['ml_prediction'].str.contains("Healthy", na=False, case=False)].copy()
             
             if df_faults.empty:
                 st.success("✅ **No confirmed alerts in the recent history.** Your engine is running perfectly!")
             else:
-                # Group by these contiguous blocks
                 confirmed_alerts = []
-                for block_id, group in df_faults.groupby('Block'):
-                    if len(group) >= 3: # MUST PERSIST for at least 3 packets to avoid false edge alarms
-                        start_time = group['timestamp'].iloc[0]
-                        end_time = group['timestamp'].iloc[-1]
-                        alert_type = group['ml_prediction'].iloc[0].replace("_", " ")
-                        
-                        # 🟢 FIX: Exact Timestamp Math
-                        t_start = pd.to_datetime(start_time)
-                        t_end = pd.to_datetime(end_time)
-                        exact_seconds = (t_end - t_start).total_seconds()
-                        
-                        # Avoid 0 seconds if the packet gap is extremely small
-                        if exact_seconds < 1: exact_seconds = len(group) * 1.5
-                        
-                        confirmed_alerts.append({
-                            "Start": start_time,
-                            "End": end_time,
-                            "Alert": alert_type,
-                            "DurationSeconds": exact_seconds
-                        })
+                # Group by each specific alert type FIRST, then find contiguous blocks
+                for alert_type, alert_group in df_faults.groupby('ml_prediction'):
+                    alert_group = alert_group.sort_values('timestamp')
+                    
+                    # Calculate time gap between rows to identify separate instances of the SAME alert
+                    alert_group['time_diff'] = alert_group['timestamp'].diff().dt.total_seconds()
+                    # A gap of > 15 seconds means the previous alert ended and a new one started
+                    alert_group['Block'] = (alert_group['time_diff'] > 15).cumsum()
+                    
+                    for block_id, group in alert_group.groupby('Block'):
+                        if len(group) >= 3: # MUST PERSIST for at least 3 packets to avoid false edge alarms
+                            start_time = group['timestamp'].iloc[0]
+                            end_time = group['timestamp'].iloc[-1]
+                            clean_alert_name = alert_type.replace("_", " ")
+                            
+                            t_start = pd.to_datetime(start_time)
+                            t_end = pd.to_datetime(end_time)
+                            exact_seconds = (t_end - t_start).total_seconds()
+                            if exact_seconds < 1: exact_seconds = len(group) * 1.5
+                            
+                            # 🟢 FIX: 'HAPPENING NOW' vs 'RESOLVED' Logic
+                            # If the end_time of this alert is within 5 seconds of the most recent packet
+                            # in the entire database, it means the alert is CURRENTLY ONGOING!
+                            max_db_time = pd.to_datetime(df['timestamp'].max())
+                            is_active = (max_db_time - t_end).total_seconds() <= 5
+                            
+                            confirmed_alerts.append({
+                                "Start": start_time,
+                                "End": end_time,
+                                "Alert": clean_alert_name,
+                                "DurationSeconds": exact_seconds,
+                                "IsActive": is_active
+                            })
                 
-                # Reverse list to show newest first
-                confirmed_alerts.reverse()
+                # Sort by newest first
+                confirmed_alerts.sort(key=lambda x: x['End'], reverse=True)
                 
                 if len(confirmed_alerts) == 0:
                     st.success("✅ **No confirmed alerts.** (Some minor sensor edges were detected but discarded as noise).")
                 else:
                     for alert in confirmed_alerts:
                         # Draw beautiful UI Banners for each confirmed alert
-                        bg_color = "#4a0f0f" if alert["Alert"] in ["Misfire", "Overheat"] else "#4a3c0f"
-                        icon = "🔥" if alert["Alert"] == "Overheating" else "⚡" if alert["Alert"] == "Bad Alternator" else "🚨"
+                        icon = "🔥" if "Overheating" in alert["Alert"] else "⚡" if "Alternator" in alert["Alert"] else "🚨"
                         
-                        # 🟢 FIX: Format into Hours, Minutes, Seconds
                         duration_text = format_offline_duration(alert['DurationSeconds'])
                         
+                        # Dynamic Styling based on Active vs Resolved state
+                        if alert['IsActive']:
+                            status_badge = "<span style='background-color: #ff4b4b; color: white; padding: 2px 8px; border-radius: 10px; font-size: 12px; font-weight: bold; margin-left: 10px; border: 1px solid white;'>🔴 HAPPENING NOW</span>"
+                            time_text = f"<b>Started:</b> {alert['Start']} (Ongoing for {duration_text})"
+                            border_color = "#ff4b4b"
+                            bg_color = "#631313" # Brighter red for active
+                        else:
+                            status_badge = "<span style='background-color: #555; color: white; padding: 2px 8px; border-radius: 10px; font-size: 12px; margin-left: 10px;'>✅ RESOLVED</span>"
+                            time_text = f"<b>Time:</b> {alert['Start']} to {alert['End']}<br><b>Total Duration:</b> {duration_text}"
+                            border_color = "#555"
+                            bg_color = "#333" # Dark grey for resolved
+                            
                         st.markdown(f"""
-                        <div style="background-color: {bg_color}; padding: 15px; border-radius: 10px; margin-bottom: 10px; border-left: 5px solid #ff4b4b;">
-                            <h4 style="margin: 0; color: white;">{icon} CONFIRMED: {alert['Alert']}</h4>
+                        <div style="background-color: {bg_color}; padding: 15px; border-radius: 10px; margin-bottom: 10px; border-left: 5px solid {border_color};">
+                            <h4 style="margin: 0; color: white;">{icon} {alert['Alert']} {status_badge}</h4>
                             <p style="margin: 5px 0 0 0; color: #d1d1d1; font-size: 14px;">
                                 <b>Component Affected:</b> Engine / Diagnostics<br>
-                                <b>Time:</b> {alert['Start']} to {alert['End']}<br>
-                                <b>Sustained Duration:</b> {duration_text}
+                                {time_text}
                             </p>
                         </div>
                         """, unsafe_allow_html=True)
