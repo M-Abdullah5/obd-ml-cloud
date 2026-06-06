@@ -227,25 +227,22 @@ if device_id:
             is_actually_live = False
             seconds_ago = 9999
             
-    # 🟢 CRITICAL PERFORMANCE OPTIMIZATION
-    # Do NOT download and concatenate the heavy history DataFrame every 1.5 seconds!
-    # We only update history every 10 seconds to drastically reduce RAM and CPU load.
-    if "last_history_update" not in st.session_state:
-        st.session_state.last_history_update = 0
+    # 🟢 FIX: UNRESTRICTED HISTORY POLLING FOR INSTANT SYNC
+    # The Live node can occasionally drop packets due to Unity batching, 
+    # forcing the dashboard to rely entirely on the History node.
+    # The previous 10-second throttle was creating a massive artificial 10-second delay 
+    # for all Online/Offline state changes and causing the 9s "DATA DELAYED" dropouts!
+    # We now fetch the tiny 50-row update every 1.5s for perfect real-time sync.
+    recent_df = get_recent_history_data(device_id).copy()
+    if "full_history_df" not in st.session_state:
+        st.session_state.full_history_df = get_full_history_data(device_id).copy()
         
-    if time.time() - st.session_state.last_history_update > 10.0:
-        st.session_state.last_history_update = time.time()
-        
-        recent_df = get_recent_history_data(device_id).copy()
-        if "full_history_df" not in st.session_state:
-            st.session_state.full_history_df = get_full_history_data(device_id).copy()
-            
-        if not recent_df.empty:
-            combined = pd.concat([st.session_state.full_history_df, recent_df])
-            combined = combined.drop_duplicates(subset=['timestamp']).sort_values('timestamp')
-            # Keep only last 2 hours to keep it even lighter
-            two_hours_ago = combined['timestamp'].max() - timedelta(hours=2)
-            st.session_state.full_history_df = combined[combined['timestamp'] >= two_hours_ago]
+    if not recent_df.empty:
+        combined = pd.concat([st.session_state.full_history_df, recent_df])
+        combined = combined.drop_duplicates(subset=['timestamp']).sort_values('timestamp')
+        # Keep only last 2 hours to keep it even lighter
+        two_hours_ago = combined['timestamp'].max() - timedelta(hours=2)
+        st.session_state.full_history_df = combined[combined['timestamp'] >= two_hours_ago]
             
     df = st.session_state.get("full_history_df", pd.DataFrame())
     
