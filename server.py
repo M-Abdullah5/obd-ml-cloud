@@ -126,29 +126,39 @@ def process_bulk_upload(data_list: List[VehicleData], background_tasks: Backgrou
         
     try:
         latest = data_list[-1]
-        # 🟢 FIX: Flawless Timezone-Independent Live Detection!
-        # Unity's LiveUploadLoop sends 1 packet, but slight network jitter causes batches of 2-3.
-        # Exact `== 1` caused the server to completely drop live updates during minor lag spikes!
-        # Cache uploads are large (up to 25), so <= 5 safely captures the live stream even with jitter.
-        is_live = len(data_list) <= 5
-
-        if is_live:
-            # 1. Update Live (Only the most recent packet)
-            live_payload = latest.dict()
-            prediction = latest.ml_prediction
+        
+        # 🟢 FIX: ALWAYS Update Live Node!
+        # Unity was sending cache batches (> 5) when lagging. Because of the previous `is_live` check, 
+        # the Live node was completely ignored, causing it to freeze on 19-hour old packets!
+        # This forced the dashboard to incorrectly report "19 hours offline" and wait 8-10 seconds 
+        # for the History node to refresh.
+        live_payload = latest.dict()
+        prediction = latest.ml_prediction
+        
+        if "Healthy" in prediction:
+            live_payload["ml_status"] = "Healthy"
+            live_payload["ml_alert"] = "None"
+        else:
+            live_payload["ml_status"] = "Warning" if prediction in ["Clogged_Filter", "Bad_Alternator"] else "Critical"
+            live_payload["ml_alert"] = f"ML DETECTION: {prediction.replace('_', ' ')}"
             
-            if "Healthy" in prediction:
-                live_payload["ml_status"] = "Healthy"
-                live_payload["ml_alert"] = "None"
-            else:
-                live_payload["ml_status"] = "Warning" if prediction in ["Clogged_Filter", "Bad_Alternator"] else "Critical"
-                live_payload["ml_alert"] = f"ML DETECTION: {prediction.replace('_', ' ')}"
-                
-            # 🟢 INJECT ABSOLUTE UTC SERVER TIME
+        # 🟢 FIX: Only inject UTC Server Time if the packet is actually from this session.
+        # If Unity pushes a 19-hour old offline cache, we DO NOT want to inject current UTC,
+        # otherwise the dashboard thinks a 19-hour old packet just arrived "live"!
+        try:
+            dt = datetime.strptime(latest.timestamp, "%Y-%m-%d %H:%M:%S")
+            # Convert packet to UTC (Assuming UTC+5 based on system context)
+            packet_utc = dt - timedelta(hours=5)
+            age_seconds = (datetime.utcnow() - packet_utc).total_seconds()
+        except:
+            age_seconds = 0
+            
+        # If packet is newer than 1 hour, it's from the current drive cycle. Inject perfect server time.
+        if -3600 < age_seconds < 3600:
             live_payload["server_timestamp_utc"] = datetime.utcnow().isoformat()
-                
-            # raise_for_status() ensures we fail loudly if Firebase rejects it!
-            session.put(f"{FIREBASE_DB_URL}live/{latest.device_id}.json", json=live_payload, timeout=5).raise_for_status()
+            
+        # raise_for_status() ensures we fail loudly if Firebase rejects it!
+        session.put(f"{FIREBASE_DB_URL}live/{latest.device_id}.json", json=live_payload, timeout=5).raise_for_status()
         
         # 2. Update History in Bulk (ALL packets at once using PATCH)
         history_updates = {}
