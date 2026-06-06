@@ -92,27 +92,24 @@ def get_live_data(device_id):
     except: pass
     return None
 
-def get_recent_history_data(device_id, last_firebase_key=None):
+def get_recent_history_data(device_id):
     try:
-        # 🟢 STEP-BY-STEP GAPLESS FETCHING
-        # If we have a bookmark, ask Firebase for exactly everything after it!
-        # Because server.py now uses Append-Only Server Arrival keys, this perfectly
-        # retrieves massive offline cache dumps chunk-by-chunk without dropping anything.
-        if last_firebase_key:
-            url = f"{FIREBASE_DB_URL}history/{device_id}.json?orderBy=\"$key\"&startAt=\"{last_firebase_key}\"&limitToFirst=300"
-        else:
-            url = f"{FIREBASE_DB_URL}history/{device_id}.json?orderBy=\"$key\"&limitToLast=300"
+        # 🟢 BULK INCREMENTAL FETCH (BACKWARD COMPATIBLE)
+        # Because your Render backend hasn't been updated to the Append-Only architecture,
+        # we CANNOT use `startAt` (it skips packets that Render inserts into the past).
+        # Instead, we brute-force pull the newest 800 packets (approx 6.5 minutes of cache)
+        # every cycle. This effortlessly absorbs the 1-minute disconnects you are testing!
+        url = f"{FIREBASE_DB_URL}history/{device_id}.json?orderBy=\"$key\"&limitToLast=800"
             
         res = get_http_session().get(url, timeout=3.0)
         if res.status_code == 200 and res.json():
             data = res.json()
-            new_last_key = max(data.keys())
             records = list(data.values())
             df = pd.DataFrame(records)
             df['timestamp'] = pd.to_datetime(df['timestamp'])
-            return df, new_last_key
+            return df
     except: pass
-    return pd.DataFrame(), last_firebase_key
+    return pd.DataFrame()
 
 def get_full_history_data(device_id):
     """ Only called ONCE when the dashboard first loads to build the initial 3-hour cache """
@@ -120,13 +117,12 @@ def get_full_history_data(device_id):
         res = get_http_session().get(f"{FIREBASE_DB_URL}history/{device_id}.json?orderBy=\"$key\"&limitToLast=6000", timeout=10.0)
         if res.status_code == 200 and res.json():
             data = res.json()
-            last_key = max(data.keys())
             records = list(data.values())
             df = pd.DataFrame(records)
             df['timestamp'] = pd.to_datetime(df['timestamp'])
-            return df, last_key
+            return df
     except: pass
-    return pd.DataFrame(), None
+    return pd.DataFrame()
 
 # ---------------------------------------------------------
 # 3. SIDEBAR (FILLED WITH CONTEXT)
@@ -162,17 +158,11 @@ st.title("🚗 ARVIS Dashboard")
 if device_id:
     # 1. FETCH FULL HISTORY ONCE 
     if "full_history_df" not in st.session_state:
-        df, last_key = get_full_history_data(device_id)
+        df = get_full_history_data(device_id)
         st.session_state.full_history_df = df.copy()
-        if last_key:
-            st.session_state.last_firebase_key = last_key
             
-    # 2. FETCH INCREMENTAL CACHE (STEP-BY-STEP)
-    last_known_key = st.session_state.get("last_firebase_key")
-    recent_df, new_last_key = get_recent_history_data(device_id, last_known_key)
-    
-    if new_last_key:
-        st.session_state.last_firebase_key = new_last_key
+    # 2. FETCH INCREMENTAL CACHE (BULK COMPATIBILITY MODE)
+    recent_df = get_recent_history_data(device_id)
         
     # 3. STACK AND TRIM
     if not recent_df.empty:
