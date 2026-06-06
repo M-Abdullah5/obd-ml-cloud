@@ -320,8 +320,7 @@ for alert in confirmed_alerts:
 <span style="font-weight: bold; font-size: 12px; letter-spacing: 1px;">⚠️ ENGINE FAULT DETECTED</span>
 <span id="close_{safe_id}" style="cursor: pointer; font-size: 14px; background: rgba(0,0,0,0.3); padding: 4px 8px; border-radius: 5px;">✖</span>
 </div>
-<div style="font-size: 16px; font-weight: bold; margin-bottom: 4px;">{alert['Alert']}</div>
-<div style="font-size: 12px; opacity: 0.9;">Ongoing for {int(alert['DurationSeconds'])}s</div>
+<div style="font-size: 16px; font-weight: bold;">{alert['Alert']}</div>
 </div>
 """
         # 🟢 FIX: Break out of the components iframe to access the parent Streamlit DOM!
@@ -343,19 +342,6 @@ for alert in confirmed_alerts:
 """
 
 floating_html += "</div>"
-
-if has_floats:
-    # 1. Inject the HTML into the main DOM
-    st.markdown(floating_html, unsafe_allow_html=True)
-    
-    # 2. Safely execute the Javascript via an invisible iframe to bind the buttons!
-    components.html(f"""
-    <script>
-        const parent = window.parent.document;
-        const session = window.parent.sessionStorage;
-        {js_scripts}
-    </script>
-    """, height=0)
 
 # ---------------------------------------------------------
 # 6. TABBED INTERFACE
@@ -545,7 +531,22 @@ with tab5:
         st.info("Awaiting live telemetry to calculate degradation slopes...")
 
 # ---------------------------------------------------------
-# 7. AUTO-REFRESH LOGIC
+# 7. INJECT GLOBAL FLOATING UI ELEMENTS (BOTTOM OF DOM)
+# ---------------------------------------------------------
+# 🟢 FIX: Moved the floating UI rendering to the absolute bottom of the Streamlit DOM!
+# Injecting UI elements above the tabs dynamically shifts the entire Streamlit component tree,
+# which causes the tab jumping bug and pushes the entire interface down!
+st.markdown(floating_html if has_floats else "<div style='display:none;'></div>", unsafe_allow_html=True)
+components.html(f"""
+<script>
+    const parent = window.parent.document;
+    const session = window.parent.sessionStorage;
+    {js_scripts}
+</script>
+""" if has_floats else "<script></script>", height=0)
+
+# ---------------------------------------------------------
+# 8. AUTO-REFRESH LOGIC
 # ---------------------------------------------------------
 # 🟢 FIX: Optimized Refresh Rates for Continuous Flow
 if is_online:
