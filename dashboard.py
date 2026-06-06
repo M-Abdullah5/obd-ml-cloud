@@ -114,7 +114,6 @@ def get_recent_history_data(device_id, last_firebase_key=None):
     except: pass
     return pd.DataFrame(), last_firebase_key
 
-@st.cache_data(ttl=3600)
 def get_full_history_data(device_id):
     """ Only called ONCE when the dashboard first loads to build the initial 3-hour cache """
     try:
