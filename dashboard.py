@@ -149,22 +149,24 @@ if device_id:
     if latest_raw:
         latest = latest_raw
         
-        # 🟢 FIX: Flawless Absolute Offline Check (No Session State!)
+        # 🟢 RESTORED: The original, proven live tracking logic.
         try:
             if "server_timestamp_utc" in latest:
                 server_arr_time = pd.to_datetime(latest["server_timestamp_utc"]).tz_localize(None)
                 seconds_ago = (datetime.utcnow() - server_arr_time).total_seconds()
             else:
-                # 🟢 NEW: Math-based absolute fallback!
-                # If server.py isn't updated on Render, we just take the phone's timestamp,
-                # convert it to UTC (Phone is UTC+5 in Pakistan), and compare to Streamlit's UTC.
-                # This guarantees the offline timer NEVER resets on page reload!
-                packet_time_utc5 = pd.to_datetime(latest.get("timestamp", ""))
-                packet_utc = packet_time_utc5 - timedelta(hours=5)
-                seconds_ago = (datetime.utcnow() - packet_utc).total_seconds()
+                current_packet_time = latest.get("timestamp", "")
                 
-            # Clamp to 0 if phone clock is slightly ahead
-            if seconds_ago < 0: seconds_ago = 0
+                if "last_seen_packet" not in st.session_state:
+                    st.session_state["last_seen_packet"] = current_packet_time
+                    st.session_state["last_arrival_time"] = time.time()
+                    
+                if current_packet_time != st.session_state["last_seen_packet"]:
+                    # The timestamp changed! The connection is definitively active!
+                    st.session_state["last_seen_packet"] = current_packet_time
+                    st.session_state["last_arrival_time"] = time.time()
+                    
+                seconds_ago = time.time() - st.session_state.get("last_arrival_time", time.time())
                 
             is_online = seconds_ago <= 15
             is_live_data_fresh = seconds_ago <= 4
