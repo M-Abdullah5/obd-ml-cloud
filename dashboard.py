@@ -166,11 +166,12 @@ if device_id:
             current_packet_time = latest.get("timestamp", "")
             
             # Cross-reference with History DF to mathematically guarantee we don't miss packets!
-            if not df.empty:
-                freshest_history_time = str(df['timestamp'].max())
+            temp_df = st.session_state.get("full_history_df", pd.DataFrame())
+            if not temp_df.empty:
+                freshest_history_time = str(temp_df['timestamp'].max())
                 if freshest_history_time > current_packet_time:
                     # History node has newer data than Live node! Extract it to fix the freeze!
-                    latest = df.iloc[-1].to_dict()
+                    latest = temp_df.iloc[-1].to_dict()
                     current_packet_time = str(latest.get("timestamp", ""))
             
             if current_packet_time != shared_state["last_seen_packet"]:
