@@ -279,20 +279,21 @@ if not df.empty and "ml_prediction" in df.columns:
     except Exception as e:
         pass
 
-# 🟢 FIX: Dynamic Tab Notification Badges!
+# 🟢 FIX: We CANNOT dynamically change Tab Names in Streamlit!
+# If the tab name changes from "Alerts (1)" to "Alerts (0)", Streamlit destroys the tab
+# and violently kicks the user back to Tab 1. 
+# To fix the jumping bug, the tab names MUST remain static!
 active_alerts_count = sum(1 for a in confirmed_alerts if a['IsActive'])
 alert_badge = f"{active_alerts_count}" if active_alerts_count <= 9 else "9+"
-alerts_tab_name = f"🚨 Alerts ({alert_badge})" if active_alerts_count > 0 else "🚨 Alerts"
 
 future_rul_status = latest.get("ml_future_status", "Healthy") if latest else "Healthy"
 future_alerts_count = 1 if future_rul_status == "Degrading" else 0
 future_badge = f"{future_alerts_count}" if future_alerts_count <= 9 else "9+"
-future_tab_name = f"🔮 Future Alerts ({future_badge})" if future_alerts_count > 0 else "🔮 Future Alerts"
 
 # ---------------------------------------------------------
 # 6. TABBED INTERFACE
 # ---------------------------------------------------------
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Live Metrics", "📈 Graphs", "📝 Raw Historical Data", alerts_tab_name, future_tab_name])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Live Metrics", "📈 Graphs", "📝 Raw Historical Data", "🚨 Alerts", "🔮 Future Alerts"])
 
 # ================= TAB 1: LIVE METRICS =================
 with tab1:
@@ -397,7 +398,12 @@ with tab3:
 
 # ================= TAB 4: ALERTS =================
 with tab4:
-    st.subheader("Historical ML Alerts (Last 7 Days)")
+    # 🟢 NEW: Display the alert count safely INSIDE the tab to prevent jumping
+    if active_alerts_count > 0:
+        st.markdown(f"<h3 style='color: #ff4b4b;'>🚨 {active_alerts_count} Active Alerts Happening Now</h3>", unsafe_allow_html=True)
+    else:
+        st.subheader("Historical ML Alerts (Last 7 Days)")
+        
     st.markdown("Automated AI Diagnostic engine scanning telemetry history to isolate confirmed component failures.")
     
     if not df.empty and "ml_prediction" in df.columns:
@@ -434,7 +440,11 @@ with tab4:
 
 # ================= TAB 5: FUTURE ALERTS (PREDICTIVE MAINTENANCE) =================
 with tab5:
-    st.subheader("🔮 Predictive Maintenance (Remaining Useful Life)")
+    if future_alerts_count > 0:
+        st.markdown(f"<h3 style='color: #f39c12;'>🔮 {future_alerts_count} Predictive Alerts</h3>", unsafe_allow_html=True)
+    else:
+        st.subheader("🔮 Predictive Maintenance (Remaining Useful Life)")
+        
     st.markdown("Advanced ML Regression Engine actively monitoring long-term sensor degradation slopes to predict failures BEFORE they happen.")
     
     # 🟢 FUTURE PROOFING: This tab is structurally ready to accept the JSON probability arrays
