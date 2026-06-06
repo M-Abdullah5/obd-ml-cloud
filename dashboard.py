@@ -237,14 +237,62 @@ else:
         st.error("🔴 **SYSTEM OFFLINE** — No vehicle connected.")
 
 # ---------------------------------------------------------
-# 5. ML ALERTS & PREDICTIVE DIAGNOSTICS
+# 5. PRE-CALCULATE ALERTS FOR TAB NOTIFICATIONS
 # ---------------------------------------------------------
-st.divider()
+confirmed_alerts = []
+if not df.empty and "ml_prediction" in df.columns:
+    try:
+        df_alerts = df.copy()
+        df_alerts['ml_prediction'] = df_alerts['ml_prediction'].astype(str).str.split(',')
+        df_alerts = df_alerts.explode('ml_prediction')
+        df_alerts['ml_prediction'] = df_alerts['ml_prediction'].str.strip()
+        df_faults = df_alerts[~df_alerts['ml_prediction'].str.contains("Healthy", na=False, case=False)].copy()
+        
+        if not df_faults.empty:
+            for alert_type, alert_group in df_faults.groupby('ml_prediction'):
+                alert_group = alert_group.sort_values('timestamp')
+                alert_group['time_diff'] = alert_group['timestamp'].diff().dt.total_seconds()
+                alert_group['Block'] = (alert_group['time_diff'] > 15).cumsum()
+                
+                for block_id, group in alert_group.groupby('Block'):
+                    if len(group) >= 3:
+                        start_time = group['timestamp'].iloc[0]
+                        end_time = group['timestamp'].iloc[-1]
+                        clean_alert_name = alert_type.replace("_", " ")
+                        
+                        t_start = pd.to_datetime(start_time)
+                        t_end = pd.to_datetime(end_time)
+                        exact_seconds = (t_end - t_start).total_seconds()
+                        if exact_seconds < 1: exact_seconds = len(group) * 1.5
+                        
+                        max_db_time = pd.to_datetime(df['timestamp'].max())
+                        is_active = (max_db_time - t_end).total_seconds() <= 5
+                        
+                        confirmed_alerts.append({
+                            "Start": start_time,
+                            "End": end_time,
+                            "Alert": clean_alert_name,
+                            "DurationSeconds": exact_seconds,
+                            "IsActive": is_active
+                        })
+            confirmed_alerts.sort(key=lambda x: x['End'], reverse=True)
+    except Exception as e:
+        pass
+
+# 🟢 FIX: Dynamic Tab Notification Badges!
+active_alerts_count = sum(1 for a in confirmed_alerts if a['IsActive'])
+alert_badge = f"{active_alerts_count}" if active_alerts_count <= 9 else "9+"
+alerts_tab_name = f"🚨 Alerts ({alert_badge})" if active_alerts_count > 0 else "🚨 Alerts"
+
+future_rul_status = latest.get("ml_future_status", "Healthy") if latest else "Healthy"
+future_alerts_count = 1 if future_rul_status == "Degrading" else 0
+future_badge = f"{future_alerts_count}" if future_alerts_count <= 9 else "9+"
+future_tab_name = f"🔮 Future Alerts ({future_badge})" if future_alerts_count > 0 else "🔮 Future Alerts"
 
 # ---------------------------------------------------------
 # 6. TABBED INTERFACE
 # ---------------------------------------------------------
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Live Metrics", "📈 Graphs", "📝 Raw Historical Data", "🚨 Alerts", "🔮 Future Alerts"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Live Metrics", "📈 Graphs", "📝 Raw Historical Data", alerts_tab_name, future_tab_name])
 
 # ================= TAB 1: LIVE METRICS =================
 with tab1:
@@ -353,91 +401,34 @@ with tab4:
     st.markdown("Automated AI Diagnostic engine scanning telemetry history to isolate confirmed component failures.")
     
     if not df.empty and "ml_prediction" in df.columns:
-        try:
-            # 🟢 FIX: Support Multiple Simultaneous Alerts
-            # Explode comma-separated alerts (e.g. "Misfire, Overheating") into separate rows
-            df_alerts = df.copy()
-            df_alerts['ml_prediction'] = df_alerts['ml_prediction'].astype(str).str.split(',')
-            df_alerts = df_alerts.explode('ml_prediction')
-            df_alerts['ml_prediction'] = df_alerts['ml_prediction'].str.strip()
-            
-            # Now filter out healthy states
-            df_faults = df_alerts[~df_alerts['ml_prediction'].str.contains("Healthy", na=False, case=False)].copy()
-            
-            if df_faults.empty:
-                st.success("✅ **No confirmed alerts in the recent history.** Your engine is running perfectly!")
-            else:
-                confirmed_alerts = []
-                # Group by each specific alert type FIRST, then find contiguous blocks
-                for alert_type, alert_group in df_faults.groupby('ml_prediction'):
-                    alert_group = alert_group.sort_values('timestamp')
-                    
-                    # Calculate time gap between rows to identify separate instances of the SAME alert
-                    alert_group['time_diff'] = alert_group['timestamp'].diff().dt.total_seconds()
-                    # A gap of > 15 seconds means the previous alert ended and a new one started
-                    alert_group['Block'] = (alert_group['time_diff'] > 15).cumsum()
-                    
-                    for block_id, group in alert_group.groupby('Block'):
-                        if len(group) >= 3: # MUST PERSIST for at least 3 packets to avoid false edge alarms
-                            start_time = group['timestamp'].iloc[0]
-                            end_time = group['timestamp'].iloc[-1]
-                            clean_alert_name = alert_type.replace("_", " ")
-                            
-                            t_start = pd.to_datetime(start_time)
-                            t_end = pd.to_datetime(end_time)
-                            exact_seconds = (t_end - t_start).total_seconds()
-                            if exact_seconds < 1: exact_seconds = len(group) * 1.5
-                            
-                            # 🟢 FIX: 'HAPPENING NOW' vs 'RESOLVED' Logic
-                            # If the end_time of this alert is within 5 seconds of the most recent packet
-                            # in the entire database, it means the alert is CURRENTLY ONGOING!
-                            max_db_time = pd.to_datetime(df['timestamp'].max())
-                            is_active = (max_db_time - t_end).total_seconds() <= 5
-                            
-                            confirmed_alerts.append({
-                                "Start": start_time,
-                                "End": end_time,
-                                "Alert": clean_alert_name,
-                                "DurationSeconds": exact_seconds,
-                                "IsActive": is_active
-                            })
+        if len(confirmed_alerts) == 0:
+            st.success("✅ **No confirmed alerts.** (Some minor sensor edges were detected but discarded as noise).")
+        else:
+            for alert in confirmed_alerts:
+                icon = "🔥" if "Overheating" in alert["Alert"] else "⚡" if "Alternator" in alert["Alert"] else "🚨"
+                duration_text = format_offline_duration(alert['DurationSeconds'])
                 
-                # Sort by newest first
-                confirmed_alerts.sort(key=lambda x: x['End'], reverse=True)
-                
-                if len(confirmed_alerts) == 0:
-                    st.success("✅ **No confirmed alerts.** (Some minor sensor edges were detected but discarded as noise).")
+                # Dynamic Styling based on Active vs Resolved state
+                if alert['IsActive']:
+                    status_badge = "<span style='background-color: #ff4b4b; color: white; padding: 2px 8px; border-radius: 10px; font-size: 12px; font-weight: bold; margin-left: 10px; border: 1px solid white;'>🔴 HAPPENING NOW</span>"
+                    time_text = f"<b>Started:</b> {alert['Start']} (Ongoing for {duration_text})"
+                    border_color = "#ff4b4b"
+                    bg_color = "#631313" 
                 else:
-                    for alert in confirmed_alerts:
-                        # Draw beautiful UI Banners for each confirmed alert
-                        icon = "🔥" if "Overheating" in alert["Alert"] else "⚡" if "Alternator" in alert["Alert"] else "🚨"
-                        
-                        duration_text = format_offline_duration(alert['DurationSeconds'])
-                        
-                        # Dynamic Styling based on Active vs Resolved state
-                        if alert['IsActive']:
-                            status_badge = "<span style='background-color: #ff4b4b; color: white; padding: 2px 8px; border-radius: 10px; font-size: 12px; font-weight: bold; margin-left: 10px; border: 1px solid white;'>🔴 HAPPENING NOW</span>"
-                            time_text = f"<b>Started:</b> {alert['Start']} (Ongoing for {duration_text})"
-                            border_color = "#ff4b4b"
-                            bg_color = "#631313" # Brighter red for active
-                        else:
-                            status_badge = "<span style='background-color: #555; color: white; padding: 2px 8px; border-radius: 10px; font-size: 12px; margin-left: 10px;'>✅ RESOLVED</span>"
-                            time_text = f"<b>Time:</b> {alert['Start']} to {alert['End']}<br><b>Total Duration:</b> {duration_text}"
-                            border_color = "#555"
-                            bg_color = "#333" # Dark grey for resolved
-                            
-                        st.markdown(f"""
-                        <div style="background-color: {bg_color}; padding: 15px; border-radius: 10px; margin-bottom: 10px; border-left: 5px solid {border_color};">
-                            <h4 style="margin: 0; color: white;">{icon} {alert['Alert']} {status_badge}</h4>
-                            <p style="margin: 5px 0 0 0; color: #d1d1d1; font-size: 14px;">
-                                <b>Component Affected:</b> Engine / Diagnostics<br>
-                                {time_text}
-                            </p>
-                        </div>
-                        """, unsafe_allow_html=True)
-                        
-        except Exception as e:
-            st.error(f"Error processing alerts: {str(e)}")
+                    status_badge = "<span style='background-color: #555; color: white; padding: 2px 8px; border-radius: 10px; font-size: 12px; margin-left: 10px;'>✅ RESOLVED</span>"
+                    time_text = f"<b>Time:</b> {alert['Start']} to {alert['End']}<br><b>Total Duration:</b> {duration_text}"
+                    border_color = "#555"
+                    bg_color = "#333" 
+                    
+                st.markdown(f"""
+                <div style="background-color: {bg_color}; padding: 15px; border-radius: 10px; margin-bottom: 10px; border-left: 5px solid {border_color};">
+                    <h4 style="margin: 0; color: white;">{icon} {alert['Alert']} {status_badge}</h4>
+                    <p style="margin: 5px 0 0 0; color: #d1d1d1; font-size: 14px;">
+                        <b>Component Affected:</b> Engine / Diagnostics<br>
+                        {time_text}
+                    </p>
+                </div>
+                """, unsafe_allow_html=True)
     else:
         st.info("Waiting for data to run diagnostics...")
 
