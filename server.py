@@ -136,7 +136,8 @@ def process_bulk_upload(data_list: List[VehicleData], background_tasks: Backgrou
             live_payload["ml_status"] = "Healthy"
             live_payload["ml_alert"] = "None"
         else:
-            live_payload["ml_status"] = "Warning" if prediction in ["Clogged_Filter", "Bad_Alternator"] else "Critical"
+            warnings = ["Weak_Dying_Battery", "Clogged_Air_Filter", "Engine_Overheating", "Vacuum_Leak", "Lazy_Oxygen_Sensor", "Minor_Spark_Plug_Misfire"]
+            live_payload["ml_status"] = "Warning" if prediction in warnings else "Critical"
             live_payload["ml_alert"] = f"ML DETECTION: {prediction.replace('_', ' ')}"
             
         try:
