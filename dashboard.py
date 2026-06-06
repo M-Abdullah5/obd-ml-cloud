@@ -309,7 +309,10 @@ for alert in confirmed_alerts:
     if alert['IsActive'] and alert['DurationSeconds'] <= 25.0:
         has_floats = True
         # Unique ID based on the exact time the fault started so it resets properly on new faults
-        safe_id = f"{alert['Alert'].replace(' ', '_')}_{str(alert['Start']).replace(' ', '_').replace(':', '')}"
+        # 🟢 FIX: We must remove hyphens (-), colons (:), and periods (.) from the timestamp!
+        # Javascript interprets hyphens as minus signs, causing a SyntaxError in the function name!
+        raw_id = f"{alert['Alert']}_{str(alert['Start'])}"
+        safe_id = raw_id.replace(' ', '_').replace('-', '_').replace(':', '_').replace('.', '_')
         
         floating_html += f"""
         <div id="float_{safe_id}" style="
