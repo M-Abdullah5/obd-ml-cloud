@@ -17,6 +17,7 @@ FIREBASE_DB_URL = "https://arapp-feb0f-default-rtdb.firebaseio.com/"
 # A simple model representing the incoming data from Unity
 class VehicleData(BaseModel):
     device_id: str
+    phone_id: str = "legacy_phone"
     timestamp: str
     RPM: float
     Speed: int
@@ -122,14 +123,26 @@ def trim_history(device_id: str):
     except Exception as e:
         print("Trim error:", e)
 
+# 🟢 NEW: Track active phone sessions to detect ID collisions!
+active_devices = {}
+
 def process_bulk_upload(data_list: List[VehicleData], background_tasks: BackgroundTasks = None):
     """ Bulk uploads an entire queue to Firebase in a single blazing fast request """
     if not data_list:
-        return
+        return False
         
     try:
         latest = data_list[-1]
         
+        # 🟢 NEW: Check for Phone ID Collisions
+        is_collision = False
+        if latest.device_id in active_devices:
+            if active_devices[latest.device_id] != latest.phone_id:
+                is_collision = True
+        else:
+            # First time this device_id is seen, claim it for this phone_id
+            active_devices[latest.device_id] = latest.phone_id
+
         # 🟢 FIX: ALWAYS Update Live Node!
         # Unity was sending cache batches (> 5) when lagging. Because of the previous `is_live` check, 
         # the Live node was completely ignored, causing it to freeze on 19-hour old packets!
@@ -194,6 +207,8 @@ def process_bulk_upload(data_list: List[VehicleData], background_tasks: Backgrou
             background_tasks.add_task(trim_history, latest.device_id)
         else:
             trim_history(latest.device_id)
+            
+        return is_collision
         
     except Exception as e:
         print(f"Bulk Upload Error: {e}")
@@ -208,8 +223,8 @@ def upload_data(data: List[VehicleData], background_tasks: BackgroundTasks):
     🟢 FIX: We wait for Firebase to successfully save the data BEFORE returning 200 OK.
     However, we offload the heavy 'trim_history' to a background task so Unity gets an instant response!
     """
-    process_bulk_upload(data, background_tasks)
-    return {"status": "success", "message": f"Bulk processing {len(data)} items"}
+    is_collision = process_bulk_upload(data, background_tasks)
+    return {"status": "success", "message": f"Bulk processing {len(data)} items", "collision": is_collision}
 
 @app.get("/")
 def health_check():
