@@ -457,6 +457,34 @@ with tab3:
     else:
         st.info("Database is entirely blank. No historical logs exist.")
 
+# 🟢 NEW: Helper to map ML predictions to physical AR Targets or locations
+def get_component_location(problem_name):
+    p = problem_name.lower()
+    
+    # 1. Map to the 9 Tracked AR Components
+    if "battery" in p:
+        return "🔋 AR Target: Battery"
+    elif "head gasket" in p or "misfire" in p or "vacuum leak" in p:
+        return "⚙️ AR Target: Main Engine"
+    elif "air filter" in p:
+        return "💨 AR Target: Air Filter"
+    elif "overheat" in p or "coolant" in p or "radiator" in p:
+        return "🌡️ AR Target: Radiator / Coolant"
+        
+    # 2. Map untracked components to physical engine bay locations
+    elif "alternator" in p:
+        return "📍 Location: Lower-left side of the main engine block, driven by the serpentine belt."
+    elif "water pump" in p:
+        return "📍 Location: Front-left side of the engine block, attached to the belt system."
+    elif "fuel pump" in p:
+        return "📍 Location: Underneath the rear passenger seat / top of the fuel tank at the back of the car."
+    elif "catalytic converter" in p:
+        return "📍 Location: Underneath the car, attached to the exhaust pipe right below the front of the engine."
+    elif "oxygen sensor" in p or "o2" in p:
+        return "📍 Location: Screwed into the exhaust manifold, clearly visible at the front/bottom of the engine block."
+    else:
+        return "📍 Location: Check Main Engine compartment."
+
 # ================= TAB 4: ALERTS =================
 with tab4:
     # 🟢 NEW: Display the alert count safely INSIDE the tab to prevent jumping
@@ -497,7 +525,7 @@ with tab4:
                 <div style="background-color: {bg_color}; padding: 15px; border-radius: 10px; margin-bottom: 10px; border-left: 5px solid {border_color};">
                     <h4 style="margin: 0; color: white;">{icon} {alert['Alert']} {status_badge}</h4>
                     <p style="margin: 5px 0 0 0; color: #d1d1d1; font-size: 14px;">
-                        <b>Component Affected:</b> Engine / Diagnostics<br>
+                        <b>Component Affected:</b> {get_component_location(alert['Alert'])}<br>
                         {time_text}
                     </p>
                 </div>
@@ -546,6 +574,7 @@ with tab5:
             <div style="background-color: #3b2a0c; padding: 15px; border-radius: 10px; margin-bottom: 10px; border-left: 5px solid #f39c12;">
                 <h4 style="margin: 0; color: #ffb74d;">⏳ PREDICTIVE WARNING: {future_problem}</h4>
                 <p style="margin: 5px 0 0 0; color: #d1d1d1; font-size: 14px;">
+                    <b>Component Affected:</b> {get_component_location(friendly_name)}<br>
                     <b>Analysis:</b> The ML Regression model has detected a slow, continuous drift in sensor data indicating the <b>{friendly_name}</b> is actively wearing out.<br>
                     <b>Time to Failure:</b> {time_estimate} left of safe driving.<br>
                     <b>Action Required:</b> Schedule a replacement for the {friendly_name} before the estimated timeframe to avoid a roadside breakdown.
