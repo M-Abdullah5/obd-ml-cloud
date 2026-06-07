@@ -33,6 +33,9 @@ class VehicleData(BaseModel):
     LTFT: float = 0
     O2Voltage: float = 0
     ml_prediction: str = "Healthy"
+    ml_future_status: str = "Healthy"
+    ml_future_component: str = "None"
+    ml_future_hours: float = 0.0
 
 def process_and_upload(data: VehicleData):
     """
