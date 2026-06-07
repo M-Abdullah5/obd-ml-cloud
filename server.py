@@ -246,7 +246,8 @@ def rename_device(req: RenameRequest):
             live_data = live_res.json()
             live_data["device_id"] = req.new_id
             session.put(f"{FIREBASE_DB_URL}live/{req.new_id}.json", json=live_data)
-            session.delete(f"{FIREBASE_DB_URL}live/{req.old_id}.json")
+            
+        session.delete(f"{FIREBASE_DB_URL}live/{req.old_id}.json")
             
         # Move History Data (This copies the whole tree)
         hist_res = session.get(f"{FIREBASE_DB_URL}history/{req.old_id}.json", timeout=20)
@@ -255,7 +256,8 @@ def rename_device(req: RenameRequest):
             for key in hist_data:
                 hist_data[key]["device_id"] = req.new_id
             session.put(f"{FIREBASE_DB_URL}history/{req.new_id}.json", json=hist_data)
-            session.delete(f"{FIREBASE_DB_URL}history/{req.old_id}.json")
+            
+        session.delete(f"{FIREBASE_DB_URL}history/{req.old_id}.json")
             
         return {"status": "success", "message": f"Renamed from {req.old_id} to {req.new_id}"}
     except Exception as e:
