@@ -523,13 +523,32 @@ with tab5:
         future_rul_hours = latest.get("ml_future_hours", 0)
         
         if future_rul_status == "Degrading":
+            # 1. Format the Component Name gracefully
+            friendly_name = future_rul_component.replace("_", " ")
+            if "Filter" in friendly_name:
+                future_problem = "Severe Air Filter Clogging"
+            elif "Alternator" in friendly_name:
+                future_problem = "Complete Alternator Failure"
+            elif "Pump" in friendly_name:
+                future_problem = "Water Pump Seizure (Engine Overheating)"
+            else:
+                future_problem = friendly_name + " Failure"
+                
+            # 2. Calculate Days
+            try:
+                hours_float = float(future_rul_hours)
+                days_left = round(hours_float / 24.0, 1)
+                time_estimate = f"{days_left} Days ({hours_float} Hours)"
+            except:
+                time_estimate = f"{future_rul_hours} Hours"
+
             st.markdown(f"""
             <div style="background-color: #3b2a0c; padding: 15px; border-radius: 10px; margin-bottom: 10px; border-left: 5px solid #f39c12;">
-                <h4 style="margin: 0; color: white;">⏳ PREDICTIVE ALERT: {future_rul_component} Degradation</h4>
+                <h4 style="margin: 0; color: #ffb74d;">⏳ PREDICTIVE WARNING: {future_problem}</h4>
                 <p style="margin: 5px 0 0 0; color: #d1d1d1; font-size: 14px;">
-                    <b>Analysis:</b> The ML Regression model has detected a gradual deviation in sensor bounds indicating physical wear.<br>
-                    <b>Estimated Remaining Useful Life (RUL):</b> {future_rul_hours} Hours<br>
-                    <b>Action Required:</b> Schedule replacement within the estimated window to prevent catastrophic failure.
+                    <b>Analysis:</b> The ML Regression model has detected a slow, continuous drift in sensor data indicating the <b>{friendly_name}</b> is actively wearing out.<br>
+                    <b>Time to Failure:</b> {time_estimate} left of safe driving.<br>
+                    <b>Action Required:</b> Schedule a replacement for the {friendly_name} before the estimated timeframe to avoid a roadside breakdown.
                 </p>
             </div>
             """, unsafe_allow_html=True)
