@@ -138,6 +138,19 @@ with st.sidebar:
     devices = get_devices()
     device_id = st.selectbox("Active Device", devices) if devices else None
     
+    # 🟢 NEW: Clear Device History Button
+    if device_id:
+        if st.button("🗑️ Clear Device History", use_container_width=True, type="primary"):
+            try:
+                get_http_session().delete(f"{FIREBASE_DB_URL}history/{device_id}.json")
+                get_http_session().delete(f"{FIREBASE_DB_URL}live/{device_id}.json")
+                if "full_history_df" in st.session_state:
+                    del st.session_state.full_history_df
+                st.toast(f"✅ History for {device_id} cleared successfully!")
+                st.rerun()
+            except Exception as e:
+                st.error("Failed to clear history")
+                
     st.divider()
     st.markdown("### 🚘 Suzuki Alto 800")
     st.markdown("- **Engine:** F8D (796cc 3-Cylinder)")

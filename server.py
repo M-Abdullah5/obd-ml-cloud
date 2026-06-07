@@ -226,6 +226,42 @@ def upload_data(data: List[VehicleData], background_tasks: BackgroundTasks):
     is_collision = process_bulk_upload(data, background_tasks)
     return {"status": "success", "message": f"Bulk processing {len(data)} items", "collision": is_collision}
 
+class RenameRequest(BaseModel):
+    old_id: str
+    new_id: str
+    phone_id: str
+
+@app.post("/api/rename")
+def rename_device(req: RenameRequest):
+    """ Renames a device in Firebase by moving all history to the new ID """
+    try:
+        # Update ownership in memory
+        if req.old_id in active_devices:
+            del active_devices[req.old_id]
+        active_devices[req.new_id] = req.phone_id
+        
+        # Move Live Data
+        live_res = session.get(f"{FIREBASE_DB_URL}live/{req.old_id}.json", timeout=10)
+        if live_res.status_code == 200 and live_res.json():
+            live_data = live_res.json()
+            live_data["device_id"] = req.new_id
+            session.put(f"{FIREBASE_DB_URL}live/{req.new_id}.json", json=live_data)
+            session.delete(f"{FIREBASE_DB_URL}live/{req.old_id}.json")
+            
+        # Move History Data (This copies the whole tree)
+        hist_res = session.get(f"{FIREBASE_DB_URL}history/{req.old_id}.json", timeout=20)
+        if hist_res.status_code == 200 and hist_res.json():
+            hist_data = hist_res.json()
+            for key in hist_data:
+                hist_data[key]["device_id"] = req.new_id
+            session.put(f"{FIREBASE_DB_URL}history/{req.new_id}.json", json=hist_data)
+            session.delete(f"{FIREBASE_DB_URL}history/{req.old_id}.json")
+            
+        return {"status": "success", "message": f"Renamed from {req.old_id} to {req.new_id}"}
+    except Exception as e:
+        print("Rename error:", e)
+        return {"status": "error", "message": str(e)}
+
 @app.get("/")
 def health_check():
     """ Render.com needs this to know the server is alive """
