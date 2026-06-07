@@ -140,16 +140,18 @@ with st.sidebar:
     
     # 🟢 NEW: Clear Device History Button
     if device_id:
-        if st.button("🗑️ Clear Device History", use_container_width=True, type="primary"):
-            try:
-                get_http_session().delete(f"{FIREBASE_DB_URL}history/{device_id}.json")
-                get_http_session().delete(f"{FIREBASE_DB_URL}live/{device_id}.json")
-                if "full_history_df" in st.session_state:
-                    del st.session_state.full_history_df
-                st.toast(f"✅ History for {device_id} cleared successfully!")
-                st.rerun()
-            except Exception as e:
-                st.error("Failed to clear history")
+        with st.expander("🗑️ Clear Device History"):
+            st.error(f"⚠️ **WARNING:** This will permanently delete ALL data for **{device_id}**! This action cannot be undone.")
+            if st.button("Confirm Delete", use_container_width=True, type="primary"):
+                try:
+                    get_http_session().delete(f"{FIREBASE_DB_URL}history/{device_id}.json")
+                    get_http_session().delete(f"{FIREBASE_DB_URL}live/{device_id}.json")
+                    if "full_history_df" in st.session_state:
+                        del st.session_state.full_history_df
+                    st.toast(f"✅ History for {device_id} cleared successfully!")
+                    st.rerun()
+                except Exception as e:
+                    st.error("Failed to clear history")
                 
     st.divider()
     st.markdown("### 🚘 Suzuki Alto 800")
